@@ -8,6 +8,7 @@ AsyncWebServer server(80);
 String ssid, password;
 
 bool connectToStoredWiFi() {
+  // Read stored SSID and password from flash preferences (read-only)
   preferences.begin("wifi", true);
   ssid = preferences.getString("ssid", "");
   password = preferences.getString("pass", "");
@@ -19,6 +20,7 @@ bool connectToStoredWiFi() {
   Serial.printf("Connecting to %s", ssid.c_str());
 
   int attempts = 0;
+  // Try to connect, waiting half a second between attempts (max 20 tries)
   while (WiFi.status() != WL_CONNECTED && attempts < 20) {
     delay(500);
     Serial.print(".");
@@ -28,10 +30,12 @@ bool connectToStoredWiFi() {
 
   bool connected = WiFi.status() == WL_CONNECTED;
 
+  // Manage connection failure counter in preferences
   preferences.begin("wifi", false);
   int failCount = preferences.getInt("fails", 0);
 
   if (!connected) {
+    // Increment and store failure count
     failCount++;
     preferences.putInt("fails", failCount);
     preferences.end();
@@ -45,6 +49,7 @@ bool connectToStoredWiFi() {
       return false;
     }
   } else {
+    // Reset failure counter after a successful connection
     preferences.putInt("fails", 0);  // Reset counter on success
     preferences.end();
   }
@@ -58,6 +63,7 @@ void startConfigPortal() {
   Serial.print("AP IP address: ");
   Serial.println(IP);
 
+  // Generate and serve HTML form for entering new WiFi credentials
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *req){
     String html = R"rawliteral(
       <html>
@@ -83,6 +89,7 @@ void startConfigPortal() {
     req->send(200, "text/html", html);
   });
 
+  // Handle form submission; save credentials and reboot
   server.on("/save", HTTP_GET, [](AsyncWebServerRequest *req){
     if (req->hasParam("ssid") && req->hasParam("password")) {
       preferences.begin("wifi", false);
