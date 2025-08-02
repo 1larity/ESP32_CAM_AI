@@ -24,11 +24,12 @@ void startCameraServer() {
   camServer.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
     // Serve a simple page with buttons that tilt and pan the camera
     String html = "<html><body><h2>ESP32-CAM Control</h2>";
+    html += "<button onclick=\"fetch('/action?go=up')\">Up</button> ";
+    html += "<button onclick=\"fetch('/action?go=down')\">Down</button><br>";
+    html += "<button onclick=\"fetch('/action?go=left')\">Left</button> ";
+    html += "<button onclick=\"fetch('/action?go=right')\">Right</button><br><br>";
     html += "<img src='http://" + WiFi.localIP().toString() + ":81/stream' width='80%'><br>";
-    html += "<button onclick=\\"fetch('/action?go=up')\\">Up</button> ";        // increase vertical angle
-    html += "<button onclick=\\"fetch('/action?go=down')\\">Down</button><br>"; // decrease vertical angle
-    html += "<button onclick=\\"fetch('/action?go=left')\\">Left</button> ";    // rotate left
-    html += "<button onclick=\\"fetch('/action?go=right')\\">Right</button>";   // rotate right
+
     html += "</body></html>";
     request->send(200, "text/html", html);
   });
