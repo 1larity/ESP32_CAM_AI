@@ -23,7 +23,7 @@ AsyncWebServer camServer(80);
 void startCameraServer() {
   camServer.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
     String html = "<html><body><h2>ESP32-CAM Control</h2>";
-    html += "<img src='http://" + WiFi.localIP().toString() + ":81/stream' width='100%'><br>";
+    html += "<img src='http://" + WiFi.localIP().toString() + ":81/stream' width='80%'><br>";
     html += "<button onclick=\"fetch('/action?go=up')\">Up</button> ";
     html += "<button onclick=\"fetch('/action?go=down')\">Down</button><br>";
     html += "<button onclick=\"fetch('/action?go=left')\">Left</button> ";
