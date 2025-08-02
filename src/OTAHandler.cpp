@@ -1,7 +1,11 @@
 #include <ArduinoOTA.h>
 #include <WiFi.h>
+#include "esp_camera.h" // Needed for esp_camera_deinit()
 
 void setupOTA() {
+  // Disable the camera to prevent OTA crashes due to memory/camera conflicts
+  esp_camera_deinit();
+
   // Set the device name for OTA updates
   ArduinoOTA.setHostname("ESP32Cam");
 
@@ -31,6 +35,7 @@ void setupOTA() {
     else if (error == OTA_END_ERROR) Serial.println("End Failed");
   });
 
+  // Start OTA service
   ArduinoOTA.begin();
   Serial.println("OTA Ready");
   Serial.print("IP address: ");
