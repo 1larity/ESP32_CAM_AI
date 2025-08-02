@@ -1,18 +1,25 @@
-#include <Arduino.h>
-
-// put function declarations here:
-int myFunction(int, int);
-
-void setup() {
-  // put your setup code here, to run once:
-  int result = myFunction(2, 3);
-}
-
-void loop() {
-  // put your main code here, to run repeatedly:
-}
-
-// put function definitions here:
-int myFunction(int x, int y) {
-  return x + y;
-}
+    // esp32cam_main.cpp
+    #include "Arduino.h"
+    #include "WiFiManager.h"
+    #include "CameraServer.h"
+    #include "OTAHandler.h"
+    #include "Utils.h"
+    
+    void setup() {
+      Serial.begin(115200);
+    
+      disableBrownout();
+      setupServos();
+      setupCamera();
+    
+      if (!connectToStoredWiFi()) {
+        startConfigPortal();
+      }
+    
+      startCameraServer();
+      setupOTA();
+    }
+    
+    void loop() {
+      handleOTA();
+    }
