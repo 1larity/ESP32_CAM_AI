@@ -2,21 +2,26 @@
 #include <WiFi.h>
 
 void setupOTA() {
+  // Set the device name for OTA updates
   ArduinoOTA.setHostname("ESP32Cam");
 
+  // Called when the OTA update starts
   ArduinoOTA.onStart([]() {
     String type = ArduinoOTA.getCommand() == U_FLASH ? "sketch" : "filesystem";
     Serial.println("Start updating " + type);
   });
 
+  // Called when the OTA update finishes
   ArduinoOTA.onEnd([]() {
     Serial.println("\nUpdate complete.");
   });
 
+  // Report OTA update progress
   ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
     Serial.printf("Progress: %u%%\r", (progress * 100) / total);
   });
 
+  // Handle OTA update errors
   ArduinoOTA.onError([](ota_error_t error) {
     Serial.printf("Error[%u]: ", error);
     if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
