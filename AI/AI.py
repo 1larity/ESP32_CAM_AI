@@ -19,7 +19,8 @@ pygame.display.set_caption("ESP32-CAM AI Tracker")
 font = pygame.font.SysFont('Arial', 16)
 
 # Load YOLO model
-model = YOLO('yolov8n.pt')  # Make sure this model is downloaded
+# model = YOLO('yolov8n.pt')  # Make sure this model is downloaded
+model = YOLO('yolov8s.pt')  # Or 'yolov8m.pt' if your system can handle it
 
 # MJPEG stream reader
 def mjpeg_stream_reader(url):
