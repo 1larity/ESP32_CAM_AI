@@ -3,100 +3,101 @@
 #include <Preferences.h>
 #include <ESPAsyncWebServer.h>
 
-Preferences preferences;
-AsyncWebServer server(80);
-String ssid, password;
+static AsyncWebServer server(80);            // single shared Async server
+static bool webStarted = false;
+static Preferences preferences;
 
-bool connectToStoredWiFi() {
-  preferences.begin("wifi", true);
-  ssid = preferences.getString("ssid", "");
-  password = preferences.getString("pass", "");
-  preferences.end();
+static String ssid;
+static String password;
 
-  if (ssid == "") return false;
-
-  WiFi.begin(ssid.c_str(), password.c_str());
-  Serial.printf("Connecting to %s", ssid.c_str());
-
-  int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-    delay(500);
-    Serial.print(".");
-    attempts++;
-  }
-  Serial.println();
-
-  bool connected = WiFi.status() == WL_CONNECTED;
-
-  preferences.begin("wifi", false);
-  int failCount = preferences.getInt("fails", 0);
-
-  if (!connected) {
-    failCount++;
-    preferences.putInt("fails", failCount);
-    preferences.end();
-
-    if (failCount >= 3) {
-      Serial.println("WiFi failed 3 times. Resetting credentials and starting AP config.");
-      preferences.begin("wifi", false);
-      preferences.clear();  // Erase bad credentials
-      preferences.end();
-      startConfigPortal();
-      return false;
-    }
-  } else {
-    preferences.putInt("fails", 0);  // Reset counter on success
-    preferences.end();
-  }
-
-  return connected;
+AsyncWebServer& getWebServer() {
+  return server;
 }
 
-void startConfigPortal() {
-  WiFi.softAP("ESP32Cam-Setup", "12345678");
-  IPAddress IP = WiFi.softAPIP();
-  Serial.print("AP IP address: ");
-  Serial.println(IP);
+// start once, safe to call repeatedly
+static void beginWebOnce() {
+  if (webStarted) return;
+  server.begin();
+  webStarted = true;
+}
 
-  server.on("/", HTTP_GET, [](AsyncWebServerRequest *req){
-    String html = R"rawliteral(
-      <html>
-      <head>
-        <title>WiFi Config</title>
-      </head>
-      <body>
-        <form action='/save'>
-          SSID:<input name='ssid'><br>
-          Password:<input name='password' id='pass' type='password'>
-          <input type='checkbox' onclick='togglePass()'> Show Password<br>
-          <input type='submit'>
-        </form>
-        <script>
-          function togglePass() {
-            var x = document.getElementById('pass');
-            x.type = x.type === 'password' ? 'text' : 'password';
-          }
-        </script>
-      </body>
-      </html>
-    )rawliteral";
+// public, idempotent wrapper
+void ensureWebServerStarted() {
+  beginWebOnce();
+}
+
+static void buildConfigRoutes() {
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest* req){
+    String html =
+      "<html><head><meta charset='utf-8'></head><body>"
+      "<h2>ESP32-CAM Wi-Fi Setup</h2>"
+      "<form action='/save' method='post'>"
+      "SSID: <input name='ssid'><br>"
+      "Password: <input id='pw' name='password' type='password'> "
+      "<button type='button' onclick=\"pw.type=pw.type==='password'?'text':'password'\">Show</button><br><br>"
+      "<button type='submit'>Save & Connect</button>"
+      "</form>"
+      "</body></html>";
     req->send(200, "text/html", html);
   });
 
-  server.on("/save", HTTP_GET, [](AsyncWebServerRequest *req){
-    if (req->hasParam("ssid") && req->hasParam("password")) {
-      preferences.begin("wifi", false);
-      preferences.putString("ssid", req->getParam("ssid")->value());
-      preferences.putString("pass", req->getParam("password")->value());
-      preferences.putInt("fails", 0);  // Reset on new save
-      preferences.end();
-      req->send(200, "text/html", "Saved. Rebooting...");
-      delay(2000);
-      ESP.restart();
-    } else {
-      req->send(400, "text/plain", "Missing parameters");
-    }
-  });
+  server.on("/save", HTTP_POST, [](AsyncWebServerRequest* req){
+    String ns, np;
+    if (req->hasParam("ssid", true)) ns = req->getParam("ssid", true)->value();
+    if (req->hasParam("password", true)) np = req->getParam("password", true)->value();
 
-  server.begin();
+    preferences.begin("wifi", false);
+    preferences.putString("ssid", ns);
+    preferences.putString("pass", np);
+    preferences.end();
+
+    req->send(200, "text/plain", "Saved. Rebooting to connect...");
+    delay(200);
+    ESP.restart();
+  });
+}
+
+bool connectToStoredWiFi() {
+  preferences.begin("wifi", true);
+  ssid     = preferences.getString("ssid", "");
+  password = preferences.getString("pass", "");
+  preferences.end();
+
+  if (ssid.isEmpty()) return false;
+
+  WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);
+  WiFi.begin(ssid.c_str(), password.c_str());
+
+  Serial.printf("Connecting to %s", ssid.c_str());
+  for (int i = 0; i < 30; ++i) {
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.printf("\nConnected: %s\n", WiFi.localIP().toString().c_str());
+      // Ensure AP is off if previously on:
+      WiFi.softAPdisconnect(true);
+      return true;
+    }
+    delay(250);
+    Serial.print(".");
+  }
+  Serial.println();
+  return false;
+}
+
+void startConfigPortal() {
+  // AP fallback
+  WiFi.disconnect(true, true);
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP("ESP32Cam-Setup", "setup1234", 6, false, 4);
+
+  buildConfigRoutes();
+  ensureWebServerStarted();  // start :80 once, safely
+
+  Serial.printf("Config portal at http://%s/\n", WiFi.softAPIP().toString().c_str());
+
+  // Block here until station connects (simple loop)
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    // optional: add timeout/auto-retry
+  }
 }

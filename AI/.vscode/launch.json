@@ -1,0 +1,12 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run AI Viewer",
+      "type": "python",
+      "request": "launch",
+      "module": "ai_viewer_modular",
+      "console": "integratedTerminal"
+    }
+  ]
+}

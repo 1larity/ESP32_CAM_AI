@@ -1,16 +1,21 @@
 #include <ArduinoOTA.h>
 #include <WiFi.h>
+#include "StreamServer.h"          // **CHANGED** to pause stream during OTA
 
 void setupOTA() {
   ArduinoOTA.setHostname("ESP32Cam");
+  ArduinoOTA.setPassword("change_me");   // **CHANGED** basic auth
 
   ArduinoOTA.onStart([]() {
     String type = ArduinoOTA.getCommand() == U_FLASH ? "sketch" : "filesystem";
     Serial.println("Start updating " + type);
+    stopStreamServer();                  // **CHANGED** prevent contention
   });
 
   ArduinoOTA.onEnd([]() {
     Serial.println("\nUpdate complete.");
+    // Option 1: restart stream, or simply restart device.
+    // **startStreamServer();**              // optional
   });
 
   ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
