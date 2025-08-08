@@ -18,10 +18,8 @@ Servo servo1, servo2;
 int servo1Pos = 90;
 int servo2Pos = 90;
 
-AsyncWebServer camServer(80);
-
 void startCameraServer() {
-  camServer.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
     // Serve a simple page with buttons that tilt and pan the camera
     String html = "<html><body><h2>ESP32-CAM Control</h2>";
     html += "<button onclick=\"fetch('/action?go=up')\">Up</button> ";
@@ -34,7 +32,7 @@ void startCameraServer() {
     request->send(200, "text/html", html);
   });
 
-  camServer.on("/action", HTTP_GET, [](AsyncWebServerRequest *request){
+  server.on("/action", HTTP_GET, [](AsyncWebServerRequest *request){
     // Adjust servo positions according to the requested direction
     if (request->hasParam("go")) {
       String dir = request->getParam("go")->value();
@@ -48,7 +46,7 @@ void startCameraServer() {
     request->send(200, "text/plain", "OK");
   });
 
-  camServer.begin();
+  server.begin();
 }
 
 void setupCamera() {
