@@ -41,12 +41,11 @@ bool connectToStoredWiFi() {
     preferences.end();
 
     if (failCount >= 3) {
-      Serial.println("WiFi failed 3 times. Resetting credentials and starting AP config.");
+      Serial.println("WiFi failed 3 times. Resetting credentials.");
       preferences.begin("wifi", false);
       preferences.clear();  // Erase bad credentials
       preferences.end();
-      startConfigPortal();
-      return false;
+      return false;  // configuration portal will be started by caller
     }
   } else {
     // Reset failure counter after a successful connection

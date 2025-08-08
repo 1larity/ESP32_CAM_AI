@@ -11,9 +11,10 @@ void setup() {
 
   setupServos();  // hardware-safe init
 
-  // Start Wi-Fi
+  // Start Wi-Fi; if it fails, launch configuration portal and skip rest
   if (!connectToStoredWiFi()) {
-    startConfigPortal();  // blocks until user enters credentials
+    startConfigPortal();
+    return;  // remain in portal mode until restart
   }
 
   // Now that WiFi is confirmed working
