@@ -1,97 +1,319 @@
-// esp32cam_main.cpp
+// CameraServer.cpp
 #include "WiFiManager.h"
 #include "CameraServer.h"
 #include "OTAHandler.h"
 #include "Utils.h"
+
 #include "esp_camera.h"
 #include <WiFi.h>
 #include <ESPAsyncWebServer.h>
 #include <ESP32Servo.h>
-
+#include <Preferences.h>
+#include <vector>
 
 #include "StreamServer.h"
 
-#define SERVO_1      14
-#define SERVO_2      15
+// ===== PTZ pins =====
+#define SERVO_1 14
+#define SERVO_2 15
 
-Servo servo1, servo2;
-int servo1Pos = 90;
-int servo2Pos = 90;
+// ===== PTZ state (servo objects must be global to match Utils.cpp's externs) =====
+Servo servo1;
+Servo servo2;
+static int servo1Pos = 90;
+static int servo2Pos = 90;
+
+// ===== Resolution options with actual pixel sizes =====
+struct ResolutionOption {
+  framesize_t size;
+  const char* name;
+  uint16_t    w;
+  uint16_t    h;
+};
+
+// From highest to lowest (safe set for OV2640)
+static const std::vector<ResolutionOption> resolutionOptions = {
+  {FRAMESIZE_UXGA,  "UXGA",   1600,1200},
+  {FRAMESIZE_SXGA,  "SXGA",   1280,1024},
+  {FRAMESIZE_XGA,   "XGA",    1024,768},
+  {FRAMESIZE_SVGA,  "SVGA",   800, 600},
+  {FRAMESIZE_VGA,   "VGA",    640, 480},
+  {FRAMESIZE_CIF,   "CIF",    352, 288},
+  {FRAMESIZE_QVGA,  "QVGA",   320, 240},
+  {FRAMESIZE_HQVGA, "HQVGA",  240, 176},
+  {FRAMESIZE_QQVGA, "QQVGA",  160, 120},
+};
+
+static inline int clamp180(int v) {
+  if (v < 0) return 0;
+  if (v > 180) return 180;
+  return v;
+}
+
+// ===== Persistence =====
+static Preferences camPrefs;
+static const char* CAM_NS  = "camera";
+static const char* KEY_RES = "res";  // framesize_t stored as uint8_t
+
+static const ResolutionOption* findOptionByName(const String& n) {
+  for (const auto& o : resolutionOptions) {
+    if (n.equalsIgnoreCase(o.name)) return &o;
+  }
+  return nullptr;
+}
+
+static const ResolutionOption* findOptionBySize(framesize_t fs) {
+  for (const auto& o : resolutionOptions) if (o.size == fs) return &o;
+  return nullptr;
+}
+
+// ===== Simple pale-blue UI theme (CSS only; no stream changes) =====
+static const char* kStyle = R"CSS(
+  <style>
+    :root{
+      --bg:#eaf4ff; --panel:#ffffff; --text:#102a43; --muted:#486581; --accent:#2b6cb0;
+      --line:#cfe3ff; --shadow:0 1px 4px rgba(16,42,67,.08);
+    }
+    *{box-sizing:border-box}
+    html,body{margin:0;padding:0;background:var(--bg);color:var(--text);
+      font-family:system-ui,-apple-system,"Segoe UI",Roboto,Ubuntu,"Helvetica Neue",Arial,sans-serif}
+    .wrap{max-width:980px;margin:20px auto;padding:0 12px}
+    .nav{display:flex;gap:8px;justify-content:flex-end;margin:6px 0 16px 0}
+    .btn{appearance:none;border:1px solid var(--line);padding:8px 12px;border-radius:8px;
+      background:#d9ebff;cursor:pointer;font-weight:600;box-shadow:var(--shadow);text-decoration:none;color:inherit}
+    .btn:hover{background:#cfe3ff}
+    .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+      box-shadow:var(--shadow);padding:14px 14px 16px 14px;margin:14px 0}
+    .panel h3{margin:0 0 10px 0;color:var(--accent)}
+    .row{margin:8px 0}
+    select,button{font-size:1rem;padding:6px 10px;border-radius:8px;border:1px solid var(--line)}
+    img.stream{max-width:100%;height:auto;border:1px solid var(--line);border-radius:10px}
+    pre{background:#f7fbff;border:1px solid var(--line);border-radius:8px;padding:8px;display:block}
+    label{color:var(--muted);margin-right:6px}
+  </style>
+)CSS";
+
+// ===== Web UI & API =====
+static void renderCameraPage(AsyncWebServerRequest* request) {
+  sensor_t* s = esp_camera_sensor_get();
+  framesize_t cur = s ? s->status.framesize : FRAMESIZE_VGA;
+
+  String html;
+  html.reserve(7000);
+  html += "<!doctype html><html><head><meta charset='utf-8'><title>ESP32‑CAM</title>";
+  html += kStyle;
+  html += "</head><body><div class='wrap'>";
+
+  // Small nav: Wi‑Fi Settings
+  html += "<div class='nav'>"
+          "<a class='btn' href='/wifi'>Wi‑Fi Settings</a>"
+          "</div>";
+
+  // PANEL: Controls
+  html += "<div class='panel'><h3>Camera Controls</h3>";
+  html += "<div class='row'><label for='res'>Resolution</label>"
+          "<select id='res' onchange=\"fetch('/resolution?set='+this.value).then(()=>location.reload())\">";
+  for (const auto& o : resolutionOptions) {
+    bool sel = (o.size == cur);
+    html += "<option value='" + String(o.name) + "'" + (sel ? " selected" : "") + ">"
+            + String(o.name) + " (" + String(o.w) + "&times;" + String(o.h) + ")</option>";
+  }
+  html += "</select></div>";
+
+  html += "<div class='row'>"
+          "<button class='btn' onclick=\"fetch('/action?go=up')\">Up</button> "
+          "<button class='btn' onclick=\"fetch('/action?go=down')\">Down</button> "
+          "<button class='btn' onclick=\"fetch('/action?go=left')\">Left</button> "
+          "<button class='btn' onclick=\"fetch('/action?go=right')\">Right</button>"
+          "</div>";
+  html += "</div>"; // panel
+
+  // PANEL: Video (unchanged stream URL to keep your working setup)
+  html += "<div class='panel'><h3>Live Video</h3>";
+  html += "<img class='stream' src='http://" + WiFi.localIP().toString() + ":81/stream' alt='Video stream'>";
+  html += "</div>";
+
+  // PANEL: Status
+  html += "<div class='panel'><h3>Status</h3><pre id='st'>Loading…</pre></div>"
+          "<script>fetch('/api/status').then(r=>r.json()).then(j=>{"
+          "document.getElementById('st').textContent=JSON.stringify(j,null,2);});</script>";
+
+  html += "</div></body></html>";
+  request->send(200, "text/html", html);
+}
 
 void startCameraServer() {
-  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
-    // Serve a simple page with buttons that tilt and pan the camera
-    String html = "<html><body><h2>ESP32-CAM Control</h2>";
-    html += "<button onclick=\"fetch('/action?go=up')\">Up</button> ";
-    html += "<button onclick=\"fetch('/action?go=down')\">Down</button><br>";
-    html += "<button onclick=\"fetch('/action?go=left')\">Left</button> ";
-    html += "<button onclick=\"fetch('/action?go=right')\">Right</button><br><br>";
-    html += "<img src='http://" + WiFi.localIP().toString() + ":81/stream' width='80%'><br>";
+  // Reuse singleton AsyncWebServer from WiFiManager (port 80)
+  AsyncWebServer& camServer = getWebServer();
 
-    html += "</body></html>";
-    request->send(200, "text/html", html);
+  // Main page: render skinned UI
+  camServer.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
+    if (!isAuthorized(request)) {
+      auto* r = request->beginResponse(401, "text/plain", "Unauthorized");
+      r->addHeader("WWW-Authenticate", "Basic realm=\"ESP32Cam\"");
+      request->send(r);
+      return;
+    }
+    renderCameraPage(request);
   });
 
-  server.on("/action", HTTP_GET, [](AsyncWebServerRequest *request){
-    // Adjust servo positions according to the requested direction
+  // Alias so AP page can link back as "/cam" later without touching other files
+  camServer.on("/cam", HTTP_GET, [](AsyncWebServerRequest *request){
+    if (!isAuthorized(request)) {
+      auto* r = request->beginResponse(401, "text/plain", "Unauthorized");
+      r->addHeader("WWW-Authenticate", "Basic realm=\"ESP32Cam\"");
+      request->send(r);
+      return;
+    }
+    renderCameraPage(request);
+  });
+
+  // Change resolution + persist
+  camServer.on("/resolution", HTTP_GET, [](AsyncWebServerRequest *request){
+    if (!isAuthorized(request)) {
+      auto* r = request->beginResponse(401, "text/plain", "Unauthorized");
+      r->addHeader("WWW-Authenticate", "Basic realm=\"ESP32Cam\"");
+      request->send(r);
+      return;
+    }
+    if (!request->hasParam("set")) {
+      request->send(400, "text/plain", "Missing ?set=");
+      return;
+    }
+
+    const String target = request->getParam("set")->value();
+    const auto* opt = findOptionByName(target);
+    if (!opt) { request->send(400, "text/plain", "Invalid resolution"); return; }
+
+    sensor_t* s = esp_camera_sensor_get();
+    if (!s) { request->send(500, "text/plain", "Sensor unavailable"); return; }
+
+    s->set_framesize(s, opt->size);
+
+    camPrefs.begin(CAM_NS, false);
+    camPrefs.putUChar(KEY_RES, static_cast<uint8_t>(opt->size));
+    camPrefs.end();
+
+    request->send(200, "text/plain", "OK");
+  });
+
+  // PTZ actions
+  camServer.on("/action", HTTP_GET, [](AsyncWebServerRequest *request){
+    if (!isAuthorized(request)) {
+      auto* r = request->beginResponse(401, "text/plain", "Unauthorized");
+      r->addHeader("WWW-Authenticate", "Basic realm=\"ESP32Cam\"");
+      request->send(r);
+      return;
+    }
     if (request->hasParam("go")) {
       String dir = request->getParam("go")->value();
-      if (dir == "up" && servo1Pos < 180) servo1Pos += 10;        // tilt up
-      else if (dir == "down" && servo1Pos > 0) servo1Pos -= 10;    // tilt down
-      else if (dir == "left" && servo2Pos < 180) servo2Pos += 10;  // pan left
-      else if (dir == "right" && servo2Pos > 0) servo2Pos -= 10;   // pan right
-      servo1.write(servo1Pos); // apply new vertical angle
-      servo2.write(servo2Pos); // apply new horizontal angle
+      if (dir == "up")          servo1Pos = clamp180(servo1Pos + 10);
+      else if (dir == "down")   servo1Pos = clamp180(servo1Pos - 10);
+      else if (dir == "left")   servo2Pos = clamp180(servo2Pos + 10);
+      else if (dir == "right")  servo2Pos = clamp180(servo2Pos - 10);
+      servo1.write(servo1Pos);
+      servo2.write(servo2Pos);
     }
     request->send(200, "text/plain", "OK");
   });
 
-  server.begin();
+  // JSON status (handy for your PC viewer)
+  camServer.on("/api/status", HTTP_GET, [](AsyncWebServerRequest* req){
+    if (!isAuthorized(req)) {
+      auto* r = req->beginResponse(401, "text/plain", "Unauthorized");
+      r->addHeader("WWW-Authenticate", "Basic realm=\"ESP32Cam\"");
+      req->send(r);
+      return;
+    }
+    sensor_t* s = esp_camera_sensor_get();
+    framesize_t fs = s ? s->status.framesize : FRAMESIZE_INVALID;
+    const auto* cur = findOptionBySize(fs);
+
+    String json = "{";
+    json += "\"ip\":\"" + WiFi.localIP().toString() + "\"";
+    if (cur) {
+      json += ",\"resolution\":\"" + String(cur->name) + "\"";
+      json += ",\"width\":" + String(cur->w) + ",\"height\":" + String(cur->h);
+    }
+    json += "}";
+    req->send(200, "application/json", json);
+  });
+
+  // Ensure the shared web server is listening (STA mode path)
+  ensureWebServerStarted();
 }
 
+// ===== Camera init (unchanged) =====
 void setupCamera() {
-  camera_config_t config;                                  // camera configuration structure
-  config.ledc_channel = LEDC_CHANNEL_0;                    // timer channel for LEDC
-  config.ledc_timer = LEDC_TIMER_0;                        // use timer 0 for LEDC
-  config.pin_d0 = 5;                                       // data bit 0
-  config.pin_d1 = 18;                                      // data bit 1
-  config.pin_d2 = 19;                                      // data bit 2
-  config.pin_d3 = 21;                                      // data bit 3
-  config.pin_d4 = 36;                                      // data bit 4
-  config.pin_d5 = 39;                                      // data bit 5
-  config.pin_d6 = 34;                                      // data bit 6
-  config.pin_d7 = 35;                                      // data bit 7
-  config.pin_xclk = 0;                                    // external clock pin
-  config.pin_pclk = 22;                                   // pixel clock pin
-  config.pin_vsync = 25;                                  // vertical sync pin
-  config.pin_href = 23;                                   // horizontal reference pin
-  config.pin_sccb_sda = 26;                               // SCCB data pin
-  config.pin_sccb_scl = 27;                               // SCCB clock pin
-  config.pin_pwdn = 32;                                   // power-down pin
-  config.pin_reset = -1;                                  // reset pin not used
-  config.xclk_freq_hz = 20000000;                         // 20 MHz clock
-  config.pixel_format = PIXFORMAT_JPEG;                   // JPEG output
+  camera_config_t config;
+  config.ledc_channel = LEDC_CHANNEL_0;
+  config.ledc_timer   = LEDC_TIMER_0;
+  config.pin_d0       = 5;
+  config.pin_d1       = 18;
+  config.pin_d2       = 19;
+  config.pin_d3       = 21;
+  config.pin_d4       = 36;
+  config.pin_d5       = 39;
+  config.pin_d6       = 34;
+  config.pin_d7       = 35;
+  config.pin_xclk     = 0;
+  config.pin_pclk     = 22;
+  config.pin_vsync    = 25;
+  config.pin_href     = 23;
+  config.pin_sccb_sda = 26;
+  config.pin_sccb_scl = 27;
+  config.pin_pwdn     = 32;
+  config.pin_reset    = -1;
+  config.xclk_freq_hz = 20000000;
+  config.pixel_format = PIXFORMAT_JPEG;
 
-  // Choose resolution and buffer count based on PSRAM availability
-  if(psramFound()){
-    config.frame_size = FRAMESIZE_VGA;                    // higher resolution with PSRAM
-    config.jpeg_quality = 10;
-    config.fb_count = 2;                                  // double buffer
-  } else {
-    config.frame_size = FRAMESIZE_CIF;                    // lower resolution without PSRAM
-    config.jpeg_quality = 12;
-    config.fb_count = 1;                                  // single buffer
+  bool psram = psramFound();
+  bool found = false;
+
+  // Try from high to low until one initialises
+  for (const auto& option : resolutionOptions) {
+    config.frame_size   = option.size;
+    config.jpeg_quality = psram ? 10 : 12;
+    config.fb_count     = psram ? 2 : 1;
+
+    // ensure clean state between attempts
+    esp_camera_deinit();
+    delay(50);
+
+    esp_err_t err = esp_camera_init(&config);
+    if (err == ESP_OK) {
+      Serial.printf("Camera initialized with resolution: %s\n", option.name);
+      found = true;
+      break;
+    } else {
+      Serial.printf("Failed to init with %s (%d), trying lower...\n", option.name, err);
+    }
   }
 
-  esp_camera_init(&config);                               // initialize camera with above settings
+  if (!found) {
+    Serial.println("Camera init failed for all resolutions.");
+    return;
+  }
 
-  // Initialize servos for camera orientation
-  servo1.setPeriodHertz(50);                              // standard 50 Hz servo frequency
-  servo2.setPeriodHertz(50);
-  servo1.attach(SERVO_1, 1000, 2000);                     // attach vertical servo
-  servo2.attach(SERVO_2, 1000, 2000);                     // attach horizontal servo
-  servo1.write(servo1Pos);                                // center vertical servo
-  servo2.write(servo2Pos);                                // center horizontal servo
+  // Apply saved framesize (if any) AFTER successful init
+  camPrefs.begin(CAM_NS, true);
+  uint8_t saved = camPrefs.getUChar(KEY_RES, 0xFF);
+  camPrefs.end();
+  if (saved != 0xFF) {
+    sensor_t* s = esp_camera_sensor_get();
+    if (s) {
+      s->set_framesize(s, static_cast<framesize_t>(saved));
+      Serial.printf("Applied saved framesize id: %u\n", saved);
+    }
+  }
 
-  startStreamServer();                                    // begin MJPEG stream server
+  // PTZ init
+  setupServos();                 // sets 50Hz on both (from Utils.cpp)
+  servo1.attach(SERVO_1, 1000, 2000);
+  servo2.attach(SERVO_2, 1000, 2000);
+  servo1.write(servo1Pos);
+  servo2.write(servo2Pos);
+
+  // Start MJPEG stream on :81 (unchanged)
+  startStreamServer();
 }

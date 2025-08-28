@@ -2,15 +2,25 @@
 #ifndef WIFI_MANAGER_H
 #define WIFI_MANAGER_H
 
-#include <ESPAsyncWebServer.h>
+#pragma once
 
-// Global web server used by both the WiFi config portal and the camera UI
-extern AsyncWebServer server;
+// Forward declarations to avoid pulling in ESPAsyncWebServer everywhere
+class AsyncWebServer;
+class AsyncWebServerRequest;
 
-// Connect to WiFi using credentials saved in preferences.
+// Expose the shared web server for other modules (e.g., CameraServer.cpp)
+AsyncWebServer& getWebServer();
+
+// Ensure the web server is started exactly once
+void ensureWebServerStarted();
+
+// Existing functions you already had
 bool connectToStoredWiFi();
-
-// Start an access point and serve a configuration portal for new credentials.
 void startConfigPortal();
 
+// Authentication helpers (Basic Auth + token)
+bool isAuthEnabled();
+bool isAuthorized(AsyncWebServerRequest* req);        // For AsyncWebServer (port 80)
+bool isAuthorizedBasicHeader(const char* header);     // For esp_http_server (port 81)
+bool isValidTokenParam(const char* token);            // For either server
 #endif

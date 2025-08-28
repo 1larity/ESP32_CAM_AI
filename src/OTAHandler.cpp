@@ -3,14 +3,13 @@
 #include "esp_camera.h" // Needed for esp_camera_deinit()
 
 void setupOTA() {
-  // Disable the camera to prevent OTA crashes due to memory/camera conflicts
-  esp_camera_deinit();
-
   // Set the device name for OTA updates
   ArduinoOTA.setHostname("ESP32Cam");
 
   // Called when the OTA update starts
   ArduinoOTA.onStart([]() {
+    // Deinit camera right before OTA begins to avoid memory/camera conflicts
+    esp_camera_deinit();
     String type = ArduinoOTA.getCommand() == U_FLASH ? "sketch" : "filesystem";
     Serial.println("Start updating " + type);
   });
