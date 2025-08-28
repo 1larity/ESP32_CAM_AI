@@ -21,6 +21,9 @@ static uint8_t g_authHash[32];
 // Stored creds
 static Preferences preferences;
 static String ssid, password;
+// Optional static IP configuration (stored in the same prefs namespace "wifi")
+static bool useStaticIP = false;
+static String ipStr, gwStr, snStr, dnsStr;
 
 // Attempts allowed before AP fallback
 static const int MAX_CONNECT_ATTEMPTS = 20;
@@ -171,6 +174,11 @@ static void loadStoredCreds() {
   preferences.begin("wifi", true);
   ssid     = preferences.getString("ssid", "");
   password = preferences.getString("pass", "");
+  useStaticIP = preferences.getBool("static", false);
+  ipStr  = preferences.getString("ip",  "");
+  gwStr  = preferences.getString("gw",  "");
+  snStr  = preferences.getString("sn",  "");
+  dnsStr = preferences.getString("dns", "");
   preferences.end();
 }
 
@@ -226,6 +234,19 @@ bool connectToStoredWiFi() {
   if (ssid.isEmpty()) return false;
 
   WiFi.mode(WIFI_STA);
+  // Apply static IP if configured and valid
+  if (useStaticIP) {
+    IPAddress ip, gw, sn, dns;
+    bool ok = ip.fromString(ipStr) && gw.fromString(gwStr) && sn.fromString(snStr);
+    if (!dns.fromString(dnsStr)) dns = gw; // default DNS to gateway if not provided
+    if (ok) {
+      Serial.printf("Using static IP: %s gw %s sn %s dns %s\n",
+        ip.toString().c_str(), gw.toString().c_str(), sn.toString().c_str(), dns.toString().c_str());
+      WiFi.config(ip, gw, sn, dns);
+    } else {
+      Serial.println("Static IP config invalid; falling back to DHCP");
+    }
+  }
   WiFi.begin(ssid.c_str(), password.c_str());
   Serial.printf("Connecting to %s", ssid.c_str());
 
@@ -284,6 +305,17 @@ static void renderWiFiPage(AsyncWebServerRequest* req, const String& msg = "") {
           "<input id='pass' name='pass' type='password' value='" + password + "'>"
           "<button type='button' class='btn' onclick=\"const p=document.getElementById('pass');p.type=p.type==='password'?'text':'password'\">Show/Hide</button>"
           "</div>";
+  // Network (DHCP / Static)
+  html += "<div class='row'><label for='ustatic'>Use Static IP</label>"
+          "<input id='ustatic' name='ustatic' type='checkbox' " + String(useStaticIP?"checked":"") + "></div>";
+  html += "<div class='row'><label for='ip'>IP Address</label>"
+          "<input id='ip' name='ip' type='text' value='" + ipStr + "' placeholder='e.g. 192.168.1.50'></div>";
+  html += "<div class='row'><label for='gw'>Gateway</label>"
+          "<input id='gw' name='gw' type='text' value='" + gwStr + "' placeholder='e.g. 192.168.1.1'></div>";
+  html += "<div class='row'><label for='sn'>Subnet</label>"
+          "<input id='sn' name='sn' type='text' value='" + snStr + "' placeholder='e.g. 255.255.255.0'></div>";
+  html += "<div class='row'><label for='dns'>DNS</label>"
+          "<input id='dns' name='dns' type='text' value='" + dnsStr + "' placeholder='(optional, defaults to gateway)'></div>";
   html += "<div class='row'><label for='auser'>Access Username</label>"
           "<input id='auser' name='auser' type='text' placeholder='(default admin)'>"
           "</div>";
@@ -353,11 +385,18 @@ static void registerWiFiRoutes() {
     }
     String newSsid, newPass;
     String newAuthUser, newAuthPass;
+    bool   newUseStatic = false;
+    String newIP, newGW, newSN, newDNS;
 
     if (req->hasParam("ssid", true)) newSsid = req->getParam("ssid", true)->value();
     if (req->hasParam("pass", true)) newPass = req->getParam("pass", true)->value();
     if (req->hasParam("auser", true)) newAuthUser = req->getParam("auser", true)->value();
     if (req->hasParam("apass", true)) newAuthPass = req->getParam("apass", true)->value();
+    if (req->hasParam("ustatic", true)) newUseStatic = true;
+    if (req->hasParam("ip",   true)) newIP  = req->getParam("ip",  true)->value();
+    if (req->hasParam("gw",   true)) newGW  = req->getParam("gw",  true)->value();
+    if (req->hasParam("sn",   true)) newSN  = req->getParam("sn",  true)->value();
+    if (req->hasParam("dns",  true)) newDNS = req->getParam("dns", true)->value();
 
     saveCreds(newSsid, newPass);
     if (req->hasParam("apass", true)) {
@@ -368,6 +407,14 @@ static void registerWiFiRoutes() {
         saveAuth(newAuthUser, newAuthPass);
       }
     }
+    // Persist network settings
+    preferences.begin("wifi", false);
+    preferences.putBool("static", newUseStatic);
+    preferences.putString("ip",  newIP);
+    preferences.putString("gw",  newGW);
+    preferences.putString("sn",  newSN);
+    preferences.putString("dns", newDNS);
+    preferences.end();
 
     // Feedback page while rebooting
     String html;
