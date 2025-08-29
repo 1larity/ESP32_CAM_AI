@@ -323,7 +323,17 @@ class CameraStreamThread(QtCore.QThread):
         self._stop.set()
         try:
             if self._resp is not None:
-                self._resp.close()
+                try:
+                    self._resp.close()
+                except Exception:
+                    pass
+                self._resp = None
+        except Exception:
+            pass
+        try:
+            if self._session is not None:
+                self._session.close()
+                self._session = None
         except Exception:
             pass
 
@@ -375,51 +385,61 @@ class CameraStreamThread(QtCore.QThread):
             if (self._resp is None) or (getattr(self._resp, 'status_code', 0) >= 400):
                 print(f"[Stream] Failed to connect {self.cfg.name}: {e1}")
                 return
-
-        for chunk in self._resp.iter_content(chunk_size=8192):
-            if self._stop.is_set():
-                break
-            if not chunk:
-                continue
-            self._buf += chunk
-            while True:
-                hdr_end = self._buf.find(b"\r\n\r\n")
-                if hdr_end == -1:
+        try:
+            for chunk in self._resp.iter_content(chunk_size=8192):
+                if self._stop.is_set():
                     break
-                headers_blob = self._buf[:hdr_end].decode('latin1', errors='ignore').lower()
-                cl_idx = headers_blob.find('content-length:')
-                if cl_idx == -1:
-                    # resync to boundary
-                    bidx = self._buf.find(self._boundary)
-                    self._buf = self._buf[bidx:] if bidx != -1 else self._buf[hdr_end+4:]
+                if not chunk:
                     continue
-                try:
-                    cl_line = headers_blob[cl_idx:].split('\r\n', 1)[0]
-                    length = int(cl_line.split(':', 1)[1].strip())
-                except Exception:
-                    bidx = self._buf.find(self._boundary)
-                    self._buf = self._buf[bidx:] if bidx != -1 else self._buf[hdr_end+4:]
-                    continue
-                start = hdr_end + 4
-                if len(self._buf) < start + length:
-                    break
-                jpg = self._buf[start:start+length]
-                tail = self._buf[start+length:]
-                bmark = b"\r\n--frame\r\n"
-                if tail.startswith(bmark):
-                    self._buf = bytearray(tail[len(bmark):])
-                else:
-                    bpos = tail.find(bmark)
-                    self._buf = bytearray(tail[bpos+len(bmark):] if bpos >= 0 else b"")
+                self._buf += chunk
+                while True:
+                    hdr_end = self._buf.find(b"\r\n\r\n")
+                    if hdr_end == -1:
+                        break
+                    headers_blob = self._buf[:hdr_end].decode('latin1', errors='ignore').lower()
+                    cl_idx = headers_blob.find('content-length:')
+                    if cl_idx == -1:
+                        # resync to boundary
+                        bidx = self._buf.find(self._boundary)
+                        self._buf = self._buf[bidx:] if bidx != -1 else self._buf[hdr_end+4:]
+                        continue
+                    try:
+                        cl_line = headers_blob[cl_idx:].split('\r\n', 1)[0]
+                        length = int(cl_line.split(':', 1)[1].strip())
+                    except Exception:
+                        bidx = self._buf.find(self._boundary)
+                        self._buf = self._buf[bidx:] if bidx != -1 else self._buf[hdr_end+4:]
+                        continue
+                    start = hdr_end + 4
+                    if len(self._buf) < start + length:
+                        break
+                    jpg = self._buf[start:start+length]
+                    tail = self._buf[start+length:]
+                    bmark = b"\r\n--frame\r\n"
+                    if tail.startswith(bmark):
+                        self._buf = bytearray(tail[len(bmark):])
+                    else:
+                        bpos = tail.find(bmark)
+                        self._buf = bytearray(tail[bpos+len(bmark):] if bpos >= 0 else b"")
 
-                # decode
-                arr = np.frombuffer(jpg, np.uint8)
-                frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-                if frame is None:
-                    continue
-                ts = time.time()
-                self.prebuffer.append((frame, ts))
-                self.frameReady.emit(frame, ts)
+                    # decode
+                    arr = np.frombuffer(jpg, np.uint8)
+                    frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+                    if frame is None:
+                        continue
+                    ts = time.time()
+                    self.prebuffer.append((frame, ts))
+                    self.frameReady.emit(frame, ts)
+        except Exception as e:
+            if not self._stop.is_set():
+                print(f"[Stream] Reader error on {self.cfg.name}: {e}")
+        finally:
+            try:
+                if self._resp is not None:
+                    self._resp.close()
+            except Exception:
+                pass
+            self._resp = None
 
 
 class CameraWidget(QtWidgets.QWidget):
