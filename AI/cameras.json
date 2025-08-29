@@ -33,5 +33,12 @@
     "user": "sysadm",
     "password": "Observa90",
     "token": null
+  },
+  {
+    "name": "Camera",
+    "host": "192.168.1.130",
+    "user": "sysadm",
+    "password": "Observa90",
+    "token": null
   }
 ]
