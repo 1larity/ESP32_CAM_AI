@@ -10,6 +10,7 @@
 #include <ESP32Servo.h>
 #include <Preferences.h>
 #include <vector>
+#include <memory>
 
 #include "StreamServer.h"
 
@@ -128,7 +129,7 @@ static void renderCameraPage(AsyncWebServerRequest* request) {
           "</div>";
   html += "</div>"; // panel
 
-  // PANEL: Video (unchanged stream URL to keep your working setup)
+  // PANEL: Video (reference style: direct :81/stream without token)
   html += "<div class='panel'><h3>Live Video</h3>";
   html += "<img class='stream' src='http://" + WiFi.localIP().toString() + ":81/stream' alt='Video stream'>";
   html += "</div>";
@@ -238,6 +239,56 @@ void startCameraServer() {
     json += "}";
     req->send(200, "application/json", json);
   });
+
+  // MJPEG stream on port 80 (proxy endpoint using shared broker)
+#if STREAM_BROKER && defined(ENABLE_PORT80_STREAM) && (ENABLE_PORT80_STREAM==1)
+  camServer.on("/stream", HTTP_GET, [](AsyncWebServerRequest *request){
+    if (!isAuthorized(request)) {
+      auto* r = request->beginResponse(401, "text/plain", "Unauthorized");
+      r->addHeader("WWW-Authenticate", "Basic realm=\"ESP32Cam\"");
+      request->send(r);
+      return;
+    }
+    // Use the same multipart format as :81 handler (header->image->boundary)
+    struct RespState { std::vector<uint8_t> pending; uint32_t last_seq = 0; };
+    auto state = std::make_shared<RespState>();
+    auto filler = [state](uint8_t* out, size_t maxLen, size_t index) mutable -> size_t {
+      extern SemaphoreHandle_t g_frameMutex;
+      extern std::vector<uint8_t> g_lastJpg;
+      extern volatile uint32_t g_frameSeq;
+      // Wait for a new frame
+      uint32_t start = millis();
+      while (state->last_seq == g_frameSeq) { vTaskDelay(5 / portTICK_PERIOD_MS); if (millis() - start > 1000) break; }
+      // Copy current frame
+      std::vector<uint8_t> local;
+      if (g_frameMutex && xSemaphoreTake(g_frameMutex, 10 / portTICK_PERIOD_MS) == pdTRUE) {
+        local = g_lastJpg; state->last_seq = g_frameSeq;
+        xSemaphoreGive(g_frameMutex);
+      }
+      if (local.empty() && state->pending.empty()) return 0;
+      const char* b = "\r\n--frame\r\n";
+      char hdr[64]; int hlen = snprintf(hdr, sizeof(hdr), "Content-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n", (unsigned)local.size());
+      // Build pending buffer if empty
+      if (state->pending.empty() && !local.empty()) {
+        state->pending.reserve(hlen + local.size() + strlen(b));
+        state->pending.insert(state->pending.end(), (const uint8_t*)hdr, (const uint8_t*)hdr+hlen);
+        state->pending.insert(state->pending.end(), local.begin(), local.end());
+        state->pending.insert(state->pending.end(), (const uint8_t*)b, (const uint8_t*)b+strlen(b));
+      }
+      if (state->pending.empty()) return 0;
+      size_t n = state->pending.size() < maxLen ? state->pending.size() : maxLen;
+      memcpy(out, state->pending.data(), n);
+      // Erase sent bytes
+      state->pending.erase(state->pending.begin(), state->pending.begin()+n);
+      return n;
+    };
+    auto* resp = request->beginChunkedResponse("multipart/x-mixed-replace; boundary=frame", filler);
+    resp->addHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+    resp->addHeader("Pragma", "no-cache");
+    resp->addHeader("Access-Control-Allow-Origin", "*");
+    request->send(resp);
+  });
+#endif
 
   // Ensure the shared web server is listening (STA mode path)
   ensureWebServerStarted();
