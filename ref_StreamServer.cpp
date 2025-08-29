@@ -54,10 +54,7 @@ static esp_err_t stream_handler(httpd_req_t *req) {
     }
   }
 
-  // Tell the client to expect multipart MJPEG stream + friendly headers
-  httpd_resp_set_hdr(req, "Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
-  httpd_resp_set_hdr(req, "Pragma", "no-cache");
-  httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+  // Tell the client to expect multipart MJPEG stream
   res = httpd_resp_set_type(req, _STREAM_CONTENT_TYPE);
   if (res != ESP_OK) return res;
 
@@ -115,61 +112,6 @@ static esp_err_t stream_handler(httpd_req_t *req) {
   return res;
 }
 
-// Snapshot endpoint for quick diagnostics
-static esp_err_t snapshot_handler(httpd_req_t *req) {
-  if (isAuthEnabled()) {
-    bool ok = false;
-    int ql = httpd_req_get_url_query_len(req);
-    if (ql > 0) {
-      char* q = (char*)malloc(ql+1);
-      if (!q) return ESP_ERR_NO_MEM;
-      if (httpd_req_get_url_query_str(req, q, ql+1) == ESP_OK) {
-        char tbuf[128];
-        if (httpd_query_key_value(q, "token", tbuf, sizeof(tbuf)) == ESP_OK) {
-          ok = isValidTokenParam(tbuf);
-        }
-      }
-      free(q);
-    }
-    if (!ok) {
-      size_t alen = httpd_req_get_hdr_value_len(req, "Authorization");
-      if (alen > 0) {
-        char* abuf = (char*)malloc(alen+1);
-        if (!abuf) return ESP_ERR_NO_MEM;
-        if (httpd_req_get_hdr_value_str(req, "Authorization", abuf, alen+1) == ESP_OK) {
-          ok = isAuthorizedBasicHeader(abuf);
-        }
-        free(abuf);
-      }
-    }
-    if (!ok) {
-      httpd_resp_set_status(req, "401 Unauthorized");
-      httpd_resp_set_hdr(req, "WWW-Authenticate", "Basic realm=\"ESP32Cam\"");
-      httpd_resp_set_type(req, "text/plain");
-      httpd_resp_send(req, "Unauthorized", HTTPD_RESP_USE_STRLEN);
-      return ESP_OK;
-    }
-  }
-  camera_fb_t* fb = esp_camera_fb_get();
-  if (!fb) {
-    httpd_resp_set_status(req, "503 Service Unavailable");
-    httpd_resp_set_type(req, "text/plain");
-    httpd_resp_send(req, "Camera unavailable", HTTPD_RESP_USE_STRLEN);
-    return ESP_OK;
-  }
-  const uint8_t* img = nullptr; size_t len = 0; uint8_t* jpg_buf = nullptr; size_t jpg_len = 0;
-  if (fb->format == PIXFORMAT_JPEG) { img = fb->buf; len = fb->len; }
-  else {
-    if (!frame2jpg(fb, 80, &jpg_buf, &jpg_len)) { esp_camera_fb_return(fb); return ESP_FAIL; }
-    img = jpg_buf; len = jpg_len;
-  }
-  httpd_resp_set_type(req, "image/jpeg");
-  httpd_resp_send(req, (const char*)img, len);
-  if (jpg_buf) free(jpg_buf);
-  esp_camera_fb_return(fb);
-  return ESP_OK;
-}
-
 /**
  * Start HTTP server dedicated to MJPEG streaming.
  * Uses port 81 and registers stream_handler for the "/stream" URI.
@@ -188,8 +130,5 @@ void startStreamServer() {
   if (httpd_start(&stream_httpd, &config) == ESP_OK) {
     // Register handler that serves the stream when /stream is requested
     httpd_register_uri_handler(stream_httpd, &stream_uri);
-    // Also provide /snap for quick diagnostics
-    httpd_uri_t snap_uri = { .uri = "/snap", .method = HTTP_GET, .handler = snapshot_handler, .user_ctx = NULL };
-    httpd_register_uri_handler(stream_httpd, &snap_uri);
   }
 }

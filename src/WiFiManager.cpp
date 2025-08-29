@@ -17,6 +17,7 @@ static bool    g_authEnabled = false;
 static String  g_authUser;
 static uint8_t g_authSalt[16];
 static uint8_t g_authHash[32];
+static String  g_authToken; // Base64(user:pass) saved at set time for convenience
 
 // Stored creds
 static Preferences preferences;
@@ -27,6 +28,87 @@ static String ipStr, gwStr, snStr, dnsStr;
 
 // Attempts allowed before AP fallback
 static const int MAX_CONNECT_ATTEMPTS = 20;
+static const int MRU_MAX = 5; // keep top-5 most recently used networks
+
+// ===== MRU helpers (top-5 networks) =====
+static void loadMRU(String ssids[], String passes[], int &count) {
+  count = 0;
+  preferences.begin("wifi", true);
+  // Read MRU slots ssid0..ssid4 / pass0..pass4
+  for (int i = 0; i < MRU_MAX; ++i) {
+    String skey = String("ssid") + i;
+    String pkey = String("pass") + i;
+    String s = preferences.getString(skey.c_str(), String());
+    String p = preferences.getString(pkey.c_str(), String());
+    if (s.length() > 0) {
+      ssids[count] = s;
+      passes[count] = p;
+      ++count;
+    }
+  }
+  // Backward compatibility: if no MRU stored, fall back to legacy keys
+  if (count == 0) {
+    String s = preferences.getString("ssid", "");
+    String p = preferences.getString("pass", "");
+    if (s.length() > 0) {
+      ssids[0] = s; passes[0] = p; count = 1;
+    }
+  }
+  preferences.end();
+}
+
+static void saveMRUList(const String ssids[], const String passes[], int count) {
+  preferences.begin("wifi", false);
+  // Persist MRU slots
+  for (int i = 0; i < MRU_MAX; ++i) {
+    if (i < count) {
+      String skey = String("ssid") + i;
+      String pkey = String("pass") + i;
+      preferences.putString(skey.c_str(), ssids[i]);
+      preferences.putString(pkey.c_str(), passes[i]);
+    } else {
+      String skey = String("ssid") + i;
+      String pkey = String("pass") + i;
+      preferences.putString(skey.c_str(), String());
+      preferences.putString(pkey.c_str(), String());
+    }
+  }
+  // Update legacy keys to the most-recent one for UI/back-compat
+  preferences.putString("ssid", count > 0 ? ssids[0] : "");
+  preferences.putString("pass", count > 0 ? passes[0] : "");
+  preferences.end();
+}
+
+static void mruMoveToFront(String ssids[], String passes[], int &count, int idx) {
+  if (idx <= 0 || idx >= count) return;
+  String s = ssids[idx];
+  String p = passes[idx];
+  for (int i = idx; i > 0; --i) {
+    ssids[i] = ssids[i-1];
+    passes[i] = passes[i-1];
+  }
+  ssids[0] = s; passes[0] = p;
+}
+
+static void mruInsertFrontUnique(String ssids[], String passes[], int &count, const String& s, const String& p) {
+  if (s.length() == 0) return;
+  // Find existing
+  int found = -1;
+  for (int i = 0; i < count; ++i) { if (ssids[i] == s) { found = i; break; } }
+  if (found >= 0) {
+    // Update pass and move to front
+    passes[found] = p;
+    mruMoveToFront(ssids, passes, count, found);
+    return;
+  }
+  // Shift down (cap at MRU_MAX-1)
+  int newCount = count < MRU_MAX ? count + 1 : MRU_MAX;
+  for (int i = newCount - 1; i > 0; --i) {
+    ssids[i] = ssids[i-1];
+    passes[i] = passes[i-1];
+  }
+  ssids[0] = s; passes[0] = p; count = newCount;
+}
 
 // ===== Shared pale-blue theme =====
 static const char* kStyle = R"CSS(
@@ -71,6 +153,7 @@ static void sha256(const uint8_t* data, size_t len, uint8_t out[32]) {
 static void loadAuthHashed() {
   Preferences p; p.begin("auth", true);
   g_authUser = p.getString("user", "");
+  g_authToken = p.getString("tok", "");
   size_t sl = p.getBytesLength("salt");
   size_t hl = p.getBytesLength("hash");
   if (sl == sizeof(g_authSalt) && hl == sizeof(g_authHash)) {
@@ -80,15 +163,28 @@ static void loadAuthHashed() {
   } else {
     g_authEnabled = false;
   }
+  // Back-compat: if no stored token but legacy plain password exists, synthesize token
+  if (g_authToken.length() == 0) {
+    String legacy = p.getString("pwd", "");
+    if (legacy.length() > 0 && g_authUser.length() > 0) {
+      String up = g_authUser + ":" + legacy;
+      size_t outcap = (up.length()*4)/3 + 8; size_t olen=0;
+      std::unique_ptr<unsigned char[]> out(new unsigned char[outcap]);
+      if (mbedtls_base64_encode(out.get(), outcap, &olen, (const unsigned char*)up.c_str(), up.length()) == 0) {
+        g_authToken = String((const char*)out.get(), olen);
+      }
+    }
+  }
   p.end();
 }
 
 static void disableAuth() {
   Preferences p; p.begin("auth", false);
-  p.remove("user"); p.remove("salt"); p.remove("hash"); p.remove("pwd");
+  p.remove("user"); p.remove("salt"); p.remove("hash"); p.remove("pwd"); p.remove("tok");
   p.end();
   g_authUser = String();
   g_authEnabled = false;
+  g_authToken = String();
 }
 
 static void saveAuth(const String& user, const String& pass) {
@@ -108,6 +204,22 @@ static void saveAuth(const String& user, const String& pass) {
   p.putBytes("salt", g_authSalt, sizeof(g_authSalt));
   p.putBytes("hash", g_authHash, sizeof(g_authHash));
   p.remove("pwd");
+  // Save Base64 token for stream embedding on port 81
+  // Warning: stores reversible credentials for convenience.
+  {
+    size_t inlen = u.length() + 1 + pass.length();
+    std::unique_ptr<unsigned char[]> in(new unsigned char[inlen]);
+    memcpy(in.get(), u.c_str(), u.length()); in.get()[u.length()] = ':';
+    memcpy(in.get()+u.length()+1, pass.c_str(), pass.length());
+    size_t outcap = (inlen * 4) / 3 + 8; size_t olen = 0;
+    std::unique_ptr<unsigned char[]> out(new unsigned char[outcap]);
+    if (mbedtls_base64_encode(out.get(), outcap, &olen, in.get(), inlen) == 0) {
+      g_authToken = String((const char*)out.get(), olen);
+      p.putString("tok", g_authToken);
+    } else {
+      g_authToken = String(); p.remove("tok");
+    }
+  }
   p.end();
 }
 
@@ -161,6 +273,14 @@ bool isAuthEnabled() {
   return g_authEnabled || legacy.length() > 0;
 }
 
+String getAuthTokenParam() {
+  // Ensure token is loaded if present
+  if (g_authToken.length()==0 && !g_authEnabled) {
+    loadAuthHashed();
+  }
+  return g_authToken;
+}
+
 bool isAuthorized(AsyncWebServerRequest* req) {
   if (!isAuthEnabled()) return true;
   if (req->hasParam("token")) { if (isValidTokenParam(req->getParam("token")->value().c_str())) return true; }
@@ -171,9 +291,13 @@ bool isAuthorized(AsyncWebServerRequest* req) {
 
 // ===== Helper: load/save stored creds =====
 static void loadStoredCreds() {
+  // Prefer MRU[0]; fall back to legacy keys handled in loadMRU
+  String ssids[MRU_MAX]; String passes[MRU_MAX]; int n = 0;
+  loadMRU(ssids, passes, n);
+  ssid = (n > 0) ? ssids[0] : String();
+  password = (n > 0) ? passes[0] : String();
+
   preferences.begin("wifi", true);
-  ssid     = preferences.getString("ssid", "");
-  password = preferences.getString("pass", "");
   useStaticIP = preferences.getBool("static", false);
   ipStr  = preferences.getString("ip",  "");
   gwStr  = preferences.getString("gw",  "");
@@ -183,10 +307,11 @@ static void loadStoredCreds() {
 }
 
 static void saveCreds(const String& s, const String& p) {
-  preferences.begin("wifi", false);
-  preferences.putString("ssid", s);
-  preferences.putString("pass", p);
-  preferences.end();
+  // Insert or move to front of MRU, then persist
+  String ssids[MRU_MAX]; String passes[MRU_MAX]; int n = 0;
+  loadMRU(ssids, passes, n);
+  mruInsertFrontUnique(ssids, passes, n, s, p);
+  saveMRUList(ssids, passes, n);
 }
 
 // ===== Public: give access to the shared server (used by CameraServer.cpp) =====
@@ -230,8 +355,12 @@ void ensureWebServerStarted() {
 
 // ===== Connect to stored Wi‑Fi (STA) =====
 bool connectToStoredWiFi() {
+  // Load static IP settings (and seed ssid/password for UI)
   loadStoredCreds();
-  if (ssid.isEmpty()) return false;
+  // Load MRU list (or legacy single entry)
+  String ssids[MRU_MAX]; String passes[MRU_MAX]; int n = 0;
+  loadMRU(ssids, passes, n);
+  if (n == 0) return false;
 
   WiFi.mode(WIFI_STA);
   // Apply static IP if configured and valid
@@ -247,21 +376,41 @@ bool connectToStoredWiFi() {
       Serial.println("Static IP config invalid; falling back to DHCP");
     }
   }
-  WiFi.begin(ssid.c_str(), password.c_str());
-  Serial.printf("Connecting to %s", ssid.c_str());
 
-  int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < MAX_CONNECT_ATTEMPTS) {
-    delay(500);
-    Serial.print(".");
-    attempts++;
-  }
-  Serial.println();
+  // Try each MRU candidate until connected
+  for (int i = 0; i < n; ++i) {
+    const String& s = ssids[i];
+    const String& p = passes[i];
+    if (s.isEmpty()) continue;
+    Serial.printf("Connecting to %s", s.c_str());
+    WiFi.begin(s.c_str(), p.c_str());
 
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.printf("Connected: %s\n", WiFi.localIP().toString().c_str());
-    return true;
+    int attempts = 0;
+    while (WiFi.status() != WL_CONNECTED && attempts < MAX_CONNECT_ATTEMPTS) {
+      delay(300);
+      Serial.print(".");
+      ++attempts;
+    }
+    Serial.println();
+
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.printf("Connected: %s\n", WiFi.localIP().toString().c_str());
+      // Move successful network to front if not already
+      if (i != 0) {
+        mruMoveToFront(ssids, passes, n, i);
+        saveMRUList(ssids, passes, n);
+      }
+      // Update exported vars for UI
+      ssid = ssids[0];
+      password = passes[0];
+      return true;
+    }
+
+    // Clean up before next attempt
+    WiFi.disconnect(true);
+    delay(200);
   }
+
   return false;
 }
 
@@ -317,12 +466,31 @@ static void renderWiFiPage(AsyncWebServerRequest* req, const String& msg = "") {
   html += "<div class='row'><label for='dns'>DNS</label>"
           "<input id='dns' name='dns' type='text' value='" + dnsStr + "' placeholder='(optional, defaults to gateway)'></div>";
   html += "<div class='row'><label for='auser'>Access Username</label>"
-          "<input id='auser' name='auser' type='text' placeholder='(default admin)'>"
+          "<input id='auser' name='auser' type='text' value='" + g_authUser + "' placeholder='(default admin)'>"
           "</div>";
   html += "<div class='row'><label for='apass'>Access Password</label>"
           "<input id='apass' name='apass' type='password' placeholder='" + String(isAuthEnabled()?"(set to change or clear)":"(leave empty to keep open)") + "'>"
           "<button type='button' class='btn' onclick=\"const a=document.getElementById('apass');a.type=a.type==='password'?'text':'password'\">Show/Hide</button>"
           "</div>";
+  // Token (read-only)
+  {
+    String tok = getAuthTokenParam();
+    html += "<div class='row'><label for='atok'>Stream Token</label>";
+    html += "<input id='atok' type='text' readonly value='" + tok + "' placeholder='(generated from user:pass)'>";
+    html += "<button type='button' class='btn' onclick=\"(function(){var el=document.getElementById('atok');el.focus();el.select();try{document.execCommand('copy');}catch(e){}})()\">Copy</button>";
+    html += "</div>";
+  }
+  // Current stream URL (clickable)
+  {
+    IPAddress ip = (WiFi.status() == WL_CONNECTED) ? WiFi.localIP() : WiFi.softAPIP();
+    String url = String("http://") + ip.toString() + ":81/stream";
+    String tok = getAuthTokenParam();
+    if (isAuthEnabled() && tok.length()>0) url += "?token=" + tok;
+    html += "<div class='row'><label>Stream URL</label>";
+    html += "<a class='btn' href='" + url + "' target='_blank'>Open Stream</a>";
+    html += "<input type='text' readonly value='" + url + "' style='flex:1 1 320px'>";
+    html += "</div>";
+  }
   if (isAuthEnabled()) html += "<div class='row hint'>Auth <b>enabled</b>. Browser prompts via Basic Auth. Also supports ?token=…</div>";
   else html += "<div class='row hint'>Auth <b>disabled</b>. Set credentials to protect the camera.</div>";
   html += "<div class='right'><button class='btn ok' type='submit'>Save &amp; Reboot</button></div>";
