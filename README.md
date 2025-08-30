@@ -52,8 +52,18 @@ Stream Quickstart
 - Web UI (with embedded live video): `http://<ip>/`
 - Wi‑Fi/Auth settings: `http://<ip>/wifi`
 
-Status API
+Desktop Viewer (MDI)
 
+- Title Bar: Each camera subwindow shows `Name [IP]` and appends `(REC)` while recording.
+- AI Controls: YOLO and Face toggles live under the camera toolbar’s `AI` dropdown menu.
+- Recording: Defaults to AVI/MJPG on Windows for reliability; falls back to MP4V if needed. Frames are resized to even dimensions automatically.
+- Camera Persistence: The app de‑duplicates cameras by host (IP).
+  - Add/Load/Save remove duplicates by IP; closing a camera removes it by IP.
+- Tools menu:
+  - Scan For Cameras: Probes the local /24 for `http://<ip>/api/advertise` and adds new devices.
+  - Manage Cameras: View/remove cameras from the saved set.
+
+Status API
 - Endpoint: `GET http://<ip>/api/status`
 - Returns: JSON with device/network and current camera resolution.
 - Example response:
@@ -63,7 +73,6 @@ Status API
   - Useful for the desktop app to discover stream size before recording/overlays.
 
 Auth & Token
-
 - When auth is enabled, the page embeds the stream with `?token=<Base64(user:pass)>` so the `<img>` can load across ports.
 - Token is generated when you save credentials on `/wifi` and is shown read‑only on that page.
 - Token helpers:
@@ -72,7 +81,6 @@ Auth & Token
   - Python: `import base64; print(base64.b64encode(b'user:pass').decode())`
 
 Troubleshooting
-
 - If the page video doesn’t load with auth enabled, confirm the Stream Token is non‑empty on `/wifi` and try the “Open Stream” link shown there.
 - Test the camera path via `http://<ip>:81/snap`.
 - Use curl to inspect HTTP status and headers if available.
@@ -80,10 +88,12 @@ Troubleshooting
 - Power‑cycle the device after flashing major changes.
 
 Repo Structure
-
 - Firmware (PlatformIO):
   - `src/StreamServer.cpp` — MJPEG stream and snapshot (port 81)
   - `src/CameraServer.cpp` — Web UI (port 80), PTZ, resolution control
   - `src/WiFiManager.cpp|.h` — Wi‑Fi, auth, token handling, UI
 - Desktop Viewer:
   - `AI/mdi_app.py` — PySide6 MDI viewer; optional CV via OpenCV/ONNX
+    - Tools → Scan For Cameras (uses `/api/advertise`)
+    - Tools → Manage Cameras (remove from saved set)
+    - Camera toolbar → AI dropdown (YOLO/Face)

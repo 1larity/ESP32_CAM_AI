@@ -447,7 +447,7 @@ class CameraWidget(QtWidgets.QWidget):
     def __init__(self, cfg: CameraConfig, parent=None):
         super().__init__(parent)
         self.cfg = cfg
-        self.setWindowTitle(cfg.name)
+        self.setWindowTitle(f"{cfg.name} [{cfg.host}]")
         self.label = QtWidgets.QLabel('Connecting…')
         self.label.setAlignment(QtCore.Qt.AlignCenter)
         self.label.setMinimumSize(320, 240)
@@ -462,6 +462,7 @@ class CameraWidget(QtWidgets.QWidget):
 
         # Controls (local toolbar)
         btns = QtWidgets.QToolBar()
+        btns.setMovable(False)
         act_start = btns.addAction('Start')
         act_stop = btns.addAction('Stop')
         btns.addSeparator()
@@ -474,10 +475,28 @@ class CameraWidget(QtWidgets.QWidget):
         act_stoprec.triggered.connect(self.stop_recording)
 
         # Toolbar toggles
+        # AI toggles moved into a dropdown menu button
         self.chk_yolo = QtWidgets.QCheckBox('YOLO'); self.chk_yolo.setChecked(True)
         self.chk_face = QtWidgets.QCheckBox('Face'); self.chk_face.setChecked(True)
-        btns.addWidget(self.chk_yolo)
-        btns.addWidget(self.chk_face)
+        self.chk_yolo.setVisible(False); self.chk_face.setVisible(False)
+        btns.addSeparator()
+        ai_btn = QtWidgets.QToolButton()
+        ai_btn.setText('AI')
+        ai_btn.setPopupMode(QtWidgets.QToolButton.InstantPopup)
+        ai_menu = QtWidgets.QMenu(ai_btn)
+        act_ai_yolo = ai_menu.addAction('YOLO')
+        act_ai_yolo.setCheckable(True); act_ai_yolo.setChecked(self.chk_yolo.isChecked())
+        act_ai_face = ai_menu.addAction('Face')
+        act_ai_face.setCheckable(True); act_ai_face.setChecked(self.chk_face.isChecked())
+        def _sync_ai():
+            act_ai_yolo.setChecked(self.chk_yolo.isChecked())
+            act_ai_face.setChecked(self.chk_face.isChecked())
+        act_ai_yolo.toggled.connect(self.chk_yolo.setChecked)
+        act_ai_face.toggled.connect(self.chk_face.setChecked)
+        self.chk_yolo.toggled.connect(lambda _: _sync_ai())
+        self.chk_face.toggled.connect(lambda _: _sync_ai())
+        ai_btn.setMenu(ai_menu)
+        btns.addWidget(ai_btn)
 
         self.lbl_status = QtWidgets.QLabel('Ready')
 
@@ -530,11 +549,11 @@ class CameraWidget(QtWidgets.QWidget):
         if self.thr.isRunning():
             self.thr.stop()
             # Give the worker time to unwind network loop
-            if not self.thr.wait(3000):
+            if not self.thr.wait(700):
                 try:
                     # As a last resort on shutdown
                     self.thr.terminate()
-                    self.thr.wait(500)
+                    self.thr.wait(200)
                 except Exception:
                     pass
 
@@ -591,17 +610,30 @@ class CameraWidget(QtWidgets.QWidget):
                 fps = max(5.0, min(30.0, frames / tspan))
         # open writer
         ts_str = time.strftime('%Y%m%d_%H%M%S')
-        outfile = os.path.join(self.out_dir, f"{self.cfg.name}_{ts_str}.mp4")
+        # Prefer MJPG/AVI for broad codec compatibility on Windows
+        outfile = os.path.join(self.out_dir, f"{self.cfg.name}_{self.cfg.host}_{ts_str}.avi")
         h, w = self.current_size()
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        # Ensure even dimensions for encoders like H.264/MP4
+        if w % 2 == 1: w -= 1
+        if h % 2 == 1: h -= 1
+        fourcc = cv2.VideoWriter_fourcc(*'MJPG')
         self.writer = cv2.VideoWriter(outfile, fourcc, fps, (w, h))
+        if not self.writer or not self.writer.isOpened():
+            # Fallback to MP4V
+            outfile = os.path.join(self.out_dir, f"{self.cfg.name}_{self.cfg.host}_{ts_str}.mp4")
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            self.writer = cv2.VideoWriter(outfile, fourcc, fps, (w, h))
+        if not self.writer or not self.writer.isOpened():
+            QtWidgets.QMessageBox.warning(self, 'Record', 'Failed to open video writer')
+            self.writer = None
+            return
         # dump prebuffer first
         for frm, _ in list(self.thr.prebuffer):
             if frm.shape[1] != w or frm.shape[0] != h:
                 frm = cv2.resize(frm, (w, h))
             self.writer.write(frm)
         self.recording = True
-        self.setWindowTitle(f"{self.cfg.name} (REC)")
+        self._update_titles(recording=True)
 
     def stop_recording(self):
         if self.recording and self.writer is not None:
@@ -611,7 +643,7 @@ class CameraWidget(QtWidgets.QWidget):
                 pass
         self.recording = False
         self.writer = None
-        self.setWindowTitle(self.cfg.name)
+        self._update_titles(recording=False)
 
     def current_size(self) -> Tuple[int,int]:
         # return H, W for writer
@@ -677,9 +709,38 @@ class CameraWidget(QtWidgets.QWidget):
             # ensure writer size consistency
             W = int(self.writer.get(cv2.CAP_PROP_FRAME_WIDTH))
             H = int(self.writer.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            # Fallback if writer reports invalid dimensions
+            if W <= 0 or H <= 0:
+                W, H = bgr.shape[1], bgr.shape[0]
+            # Ensure even dims
+            if W % 2 == 1: W -= 1
+            if H % 2 == 1: H -= 1
             if bgr.shape[1] != W or bgr.shape[0] != H:
-                bgr = cv2.resize(bgr, (W, H))
-            self.writer.write(bgr)
+                try:
+                    bgr = cv2.resize(bgr, (W, H))
+                except Exception:
+                    # As a last resort, skip resizing and write the original
+                    W, H = bgr.shape[1], bgr.shape[0]
+            try:
+                self.writer.write(bgr)
+            except Exception:
+                # If writing fails, stop recording gracefully
+                self.stop_recording()
+
+    def _update_titles(self, recording: bool | None = None):
+        rec = recording if recording is not None else self.recording
+        title = f"{self.cfg.name} [{self.cfg.host}]" + (" (REC)" if rec else "")
+        try:
+            self.setWindowTitle(title)
+        except Exception:
+            pass
+        try:
+            # Also update the QMdiSubWindow title if hosted
+            sw = self.window()
+            if isinstance(sw, QtWidgets.QMdiSubWindow):
+                sw.setWindowTitle(title)
+        except Exception:
+            pass
 
     def shutdown(self):
         # Stop timers first to prevent new actions
@@ -694,9 +755,9 @@ class CameraWidget(QtWidgets.QWidget):
         try:
             if self.det_thr.isRunning():
                 self.det_thr.stop()
-                if not self.det_thr.wait(2000):
+                if not self.det_thr.wait(600):
                     self.det_thr.terminate()
-                    self.det_thr.wait(500)
+                    self.det_thr.wait(200)
         except Exception:
             pass
 
@@ -976,7 +1037,11 @@ class MainWindow(QtWidgets.QMainWindow):
         menu_file = mb.addMenu('&File')
         menu_tools = mb.addMenu('&Tools')
         act_dl_yolo = menu_tools.addAction('Download YOLO Model')
+        act_scan_net = menu_tools.addAction('Scan For Cameras')
+        act_manage_cams = menu_tools.addAction('Manage Cameras')
         act_dl_yolo.triggered.connect(self.download_yolo_model)
+        act_scan_net.triggered.connect(self.scan_network)
+        act_manage_cams.triggered.connect(self.manage_cameras)
         # Import and Cull submenus
         menu_import = menu_tools.addMenu('Import')
         act_imp_faces = menu_import.addAction('Import Faces...')
@@ -1045,7 +1110,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self._prefs_path = os.path.join('ai','cameras.json')
         self._cam_defs = []
         self.load_cameras()
+        seen_hosts=set()
         for d in self._cam_defs:
+            try:
+                h=(d.get('host') or '').strip()
+            except Exception:
+                h=''
+            if h and h in seen_hosts:
+                continue
+            seen_hosts.add(h)
             self.add_camera_from_cfg(CameraConfig(**d))
 
         # Add enrollment to Tools menu
@@ -1102,8 +1175,16 @@ class MainWindow(QtWidgets.QMainWindow):
         cfg = dlg.get_config()
         if not cfg:
             return
-        # save to prefs
-        self._cam_defs.append(cfg.__dict__)
+        # save to prefs (de-dup by host)
+        host = (cfg.host or '').strip()
+        updated = False
+        for i, d in enumerate(list(self._cam_defs)):
+            if (d.get('host') or '').strip() == host:
+                self._cam_defs[i] = cfg.__dict__
+                updated = True
+                break
+        if not updated:
+            self._cam_defs.append(cfg.__dict__)
         self.save_cameras()
         self.add_camera_from_cfg(cfg)
 
@@ -1175,7 +1256,14 @@ class MainWindow(QtWidgets.QMainWindow):
             self._cam_defs = []
             if hasattr(self, '_prefs_path') and os.path.exists(self._prefs_path):
                 with open(self._prefs_path,'r',encoding='utf-8') as f:
-                    self._cam_defs = json.load(f)
+                    defs = json.load(f)
+                    # de-duplicate by host (prefer last occurrence)
+                    uniq = {}
+                    for d in defs if isinstance(defs, list) else []:
+                        h = (d.get('host') or '').strip()
+                        if not h: continue
+                        uniq[h] = d
+                    self._cam_defs = list(uniq.values())
         except Exception:
             self._cam_defs = []
 
@@ -1185,18 +1273,134 @@ class MainWindow(QtWidgets.QMainWindow):
             if not hasattr(self, '_prefs_path'):
                 self._prefs_path = os.path.join('ai','cameras.json')
             os.makedirs(os.path.dirname(self._prefs_path), exist_ok=True)
+            # sanitize and de-duplicate by host before save
+            uniq = {}
+            for d in self._cam_defs:
+                if not isinstance(d, dict):
+                    continue
+                h = (d.get('host') or '').strip()
+                if not h: continue
+                uniq[h] = d
             with open(self._prefs_path,'w',encoding='utf-8') as f:
-                json.dump(self._cam_defs, f, indent=2)
+                json.dump(list(uniq.values()), f, indent=2)
         except Exception:
             pass
 
     @QtCore.Slot(object)
     def on_camera_closed(self, cfg: CameraConfig):
         try:
-            self._cam_defs = [d for d in self._cam_defs if not (d.get('name')==cfg.name and d.get('host')==cfg.host)]
+            # remove by host (unique key)
+            self._cam_defs = [d for d in self._cam_defs if (d.get('host') or '').strip() != (cfg.host or '').strip()]
             self.save_cameras()
         except Exception:
             pass
+
+    def scan_network(self):
+        # Discover ESP32-CAMs by probing /api/advertise (no auth required)
+        try:
+            import socket, ipaddress, concurrent.futures
+            # Determine local IPv4
+            local_ip = None
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.settimeout(0.2)
+            try:
+                s.connect(('8.8.8.8', 80))
+                local_ip = s.getsockname()[0]
+            except Exception:
+                pass
+            finally:
+                try: s.close()
+                except Exception: pass
+            if not local_ip:
+                QtWidgets.QMessageBox.warning(self, 'Scan', 'Could not determine local IP')
+                return
+            net = ipaddress.ip_network(local_ip + '/24', strict=False)
+            targets = [str(ip) for ip in net.hosts()]
+            found = []
+            def probe(ip):
+                try:
+                    r = requests.get(f'http://{ip}/api/advertise', timeout=0.3)
+                    if r.status_code == 200:
+                        j = r.json()
+                        name = j.get('name') or 'ESP32-CAM'
+                        host = ip
+                        return {'name': name, 'host': host}
+                except Exception:
+                    return None
+                return None
+            with concurrent.futures.ThreadPoolExecutor(max_workers=32) as ex:
+                for res in ex.map(probe, targets):
+                    if res:
+                        found.append(res)
+            # merge into defs
+            existing = { (d.get('host') or '').strip() for d in self._cam_defs }
+            added = 0
+            for d in found:
+                h = (d['host'] or '').strip()
+                if h and h not in existing:
+                    self._cam_defs.append(d)
+                    try:
+                        self.add_camera_from_cfg(CameraConfig(**d))
+                    except Exception:
+                        pass
+                    added += 1
+            self.save_cameras()
+            QtWidgets.QMessageBox.information(self, 'Scan', f'Found {len(found)} device(s), added {added} new')
+        except Exception as ex:
+            QtWidgets.QMessageBox.warning(self, 'Scan', f'Failed to scan: {ex}')
+
+    def manage_cameras(self):
+        # Simple dialog to view/remove saved cameras
+        class _ManageDlg(QtWidgets.QDialog):
+            def __init__(self, items, parent=None):
+                super().__init__(parent)
+                self.setWindowTitle('Manage Cameras')
+                v = QtWidgets.QVBoxLayout(self)
+                self.list = QtWidgets.QListWidget(); self.list.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
+                for it in items:
+                    name = it.get('name') or 'Camera'
+                    host = it.get('host') or ''
+                    lw = QtWidgets.QListWidgetItem(f"{name}  [{host}]")
+                    lw.setData(QtCore.Qt.UserRole, host)
+                    self.list.addItem(lw)
+                v.addWidget(self.list)
+                btns = QtWidgets.QDialogButtonBox()
+                self.btn_rm = btns.addButton('Remove Selected', QtWidgets.QDialogButtonBox.ActionRole)
+                btn_close = btns.addButton(QtWidgets.QDialogButtonBox.Close)
+                v.addWidget(btns)
+                self.btn_rm.clicked.connect(self._on_remove)
+                btn_close.clicked.connect(self.accept)
+                self.removed = []
+            def _on_remove(self):
+                sel = self.list.selectedItems()
+                if not sel:
+                    return
+                if QtWidgets.QMessageBox.question(self, 'Remove', f'Remove {len(sel)} camera(s)?') != QtWidgets.QMessageBox.Yes:
+                    return
+                for it in sel:
+                    host = it.data(QtCore.Qt.UserRole)
+                    self.removed.append(host)
+                    row = self.list.row(it)
+                    self.list.takeItem(row)
+        # Build and run dialog
+        dlg = _ManageDlg(self._cam_defs, self)
+        dlg.exec()
+        if not getattr(dlg, 'removed', None):
+            return
+        removed_hosts = set((h or '').strip() for h in dlg.removed)
+        if not removed_hosts:
+            return
+        # Update saved list
+        self._cam_defs = [d for d in self._cam_defs if (d.get('host') or '').strip() not in removed_hosts]
+        self.save_cameras()
+        # Close any open windows for removed hosts
+        for sub in list(self.mdi.subWindowList()):
+            w = sub.widget()
+            try:
+                if hasattr(w, 'cfg') and (w.cfg.host or '').strip() in removed_hosts:
+                    sub.close()
+            except Exception:
+                continue
 
     # ----- Active camera helpers
     def _active_camera(self) -> CameraWidget | None:
