@@ -38,6 +38,31 @@ _sys.path.append(os.path.dirname(__file__))  # allow local module imports
 from gallery import GalleryDialog
 import tools
 
+
+class CollectionDialog(QtWidgets.QDialog):
+    stopClicked = QtCore.Signal()
+    def __init__(self, parent=None, title: str = 'Collection'):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setModal(False)
+        self.setWindowFlag(QtCore.Qt.WindowType.WindowStaysOnTopHint, True)
+        self.resize(360, 120)
+        v = QtWidgets.QVBoxLayout(self)
+        self.lbl = QtWidgets.QLabel('Starting...')
+        self.lbl.setWordWrap(True)
+        v.addWidget(self.lbl, 1)
+        btns = QtWidgets.QDialogButtonBox()
+        self.btn_stop = btns.addButton('Stop', QtWidgets.QDialogButtonBox.ActionRole)
+        self.btn_close = btns.addButton(QtWidgets.QDialogButtonBox.Close)
+        v.addWidget(btns)
+        self.btn_stop.clicked.connect(lambda: self.stopClicked.emit())
+        self.btn_close.clicked.connect(self.accept)
+    def set_status(self, text: str):
+        try:
+            self.lbl.setText(text)
+        except Exception:
+            pass
+
 # ------------------------------
 # Simple AI helpers (YOLO, FaceDB, PetsDB)
 # ------------------------------
@@ -444,6 +469,7 @@ class CameraStreamThread(QtCore.QThread):
 
 class CameraWidget(QtWidgets.QWidget):
     closed = QtCore.Signal(dict)
+    eventLogged = QtCore.Signal(str)
     def __init__(self, cfg: CameraConfig, parent=None):
         super().__init__(parent)
         self.cfg = cfg
@@ -459,6 +485,16 @@ class CameraWidget(QtWidgets.QWidget):
         self.out_dir = os.path.join('ai', 'recordings')
         os.makedirs(self.out_dir, exist_ok=True)
         self.target_fps = 20.0
+        # Event logging (per camera)
+        self.log_dir = os.path.join('ai', 'logs')
+        os.makedirs(self.log_dir, exist_ok=True)
+        safe_name = ''.join(c if c.isalnum() or c in ('_','-') else '_' for c in (self.cfg.name or 'cam'))
+        safe_host = ''.join(c if c.isalnum() or c in ('_','-','.') else '_' for c in (self.cfg.host or 'host'))
+        self.log_path = os.path.join(self.log_dir, f"events_{safe_name}_{safe_host}.log")
+        self.event_buffer: list[str] = []  # last N events for sidebar
+        # Presence tracking with hysteresis
+        self.presence = {}  # id -> {present:bool, enter:float, last:float, missing_since:float|None}
+        self.grace_sec = 1.0  # require this absence before logging exit
 
         # Controls (local toolbar)
         btns = QtWidgets.QToolBar()
@@ -488,22 +524,31 @@ class CameraWidget(QtWidgets.QWidget):
         act_ai_yolo.setCheckable(True); act_ai_yolo.setChecked(self.chk_yolo.isChecked())
         act_ai_face = ai_menu.addAction('Face')
         act_ai_face.setCheckable(True); act_ai_face.setChecked(self.chk_face.isChecked())
+        # Optional dog identity recognition
+        self.chk_dogid = QtWidgets.QCheckBox('Dog ID'); self.chk_dogid.setChecked(True)
+        act_ai_dogid = ai_menu.addAction('Dog ID')
+        act_ai_dogid.setCheckable(True); act_ai_dogid.setChecked(self.chk_dogid.isChecked())
         def _sync_ai():
             act_ai_yolo.setChecked(self.chk_yolo.isChecked())
             act_ai_face.setChecked(self.chk_face.isChecked())
+            act_ai_dogid.setChecked(self.chk_dogid.isChecked())
         act_ai_yolo.toggled.connect(self.chk_yolo.setChecked)
         act_ai_face.toggled.connect(self.chk_face.setChecked)
+        act_ai_dogid.toggled.connect(self.chk_dogid.setChecked)
         self.chk_yolo.toggled.connect(lambda _: _sync_ai())
         self.chk_face.toggled.connect(lambda _: _sync_ai())
+        self.chk_dogid.toggled.connect(lambda _: _sync_ai())
         ai_btn.setMenu(ai_menu)
         btns.addWidget(ai_btn)
 
         self.lbl_status = QtWidgets.QLabel('Ready')
+        self.lbl_status.setStyleSheet('color:#246; padding:2px 4px;')
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(4,4,4,4)
         layout.addWidget(btns)
         layout.addWidget(self.label, 1)
+        # intentionally not adding lbl_status to the layout (no in-window collection status)
 
         # Stream thread
         self.thr = CameraStreamThread(cfg)
@@ -516,6 +561,8 @@ class CameraWidget(QtWidgets.QWidget):
         self.last_face_bbox=None; self.last_pet_bbox=None
         self.collect_face=None  # {'name':str,'n':int,'col':int,'last':float}
         self.collect_pet=None   # {'name':str,'sp':str,'n':int,'col':int,'last':float}
+        self.dogid_thresh = 0.18
+        self.collect_dlg = None # popup dialog for collection status
 
         # Shared frame and results (thread-safe)
         self._latest_frame = None
@@ -658,14 +705,43 @@ class CameraWidget(QtWidgets.QWidget):
         with self._frame_lock:
             self._latest_frame = bgr.copy()
 
+        # Keep a clean copy before any overlays for saving samples
+        raw_bgr = bgr.copy()
+
         # Draw last results as overlays
         # (Rendering stale by <= detection interval, keeps UI responsive)
         dets = self._last_dets
         faces = self._last_faces
+        # Recognize dog identities if enabled
+        recognized_dogs = []  # list of (name, score, x,y,w,h)
+        if getattr(self, 'chk_dogid', None) and self.chk_dogid.isChecked():
+            try:
+                for (cls,conf,x,y,w,h) in dets:
+                    if cls == 'dog':
+                        roi = raw_bgr[max(0,y):y+h, max(0,x):x+w]
+                        if roi.size > 0:
+                            name, score = self.pets.recognize(roi, 'dog')
+                            if name and name != 'unknown' and float(score) >= self.dogid_thresh:
+                                recognized_dogs.append((name, float(score), x, y, w, h))
+            except Exception:
+                pass
+
         for (cls,conf,x,y,w,h) in dets:
             color = (255,0,0) if cls=='person' else (0,0,255) if cls=='dog' else (255,0,255) if cls=='cat' else (0,255,255)
             cv2.rectangle(bgr,(x,y),(x+w,y+h),color,2)
-            cv2.putText(bgr,f"{cls} {conf:.2f}", (x,max(0,y-6)), cv2.FONT_HERSHEY_SIMPLEX,0.5,color,1,cv2.LINE_AA)
+            label = f"{cls} {conf:.2f}"
+            if cls == 'dog' and recognized_dogs:
+                # find a matching recognized dog by IOU overlap
+                best=None; best_iou=0.0
+                for (nm,sc,dx,dy,dw,dh) in recognized_dogs:
+                    # compute simple IOU
+                    x1=max(x,dx); y1=max(y,dy); x2=min(x+w,dx+dw); y2=min(y+h,dy+dh)
+                    inter=max(0,x2-x1)*max(0,y2-y1); ua=w*h + dw*dh - inter
+                    iou = (inter/ua) if ua>0 else 0.0
+                    if iou>best_iou: best_iou=iou; best=(nm,sc)
+                if best and best_iou>=0.3:
+                    label = f"dog {best[0]} {best[1]:.2f}"
+            cv2.putText(bgr,label, (x,max(0,y-6)), cv2.FONT_HERSHEY_SIMPLEX,0.5,color,1,cv2.LINE_AA)
             if cls in ('dog','cat'):
                 self.last_pet_bbox=(x,y,w,h,cls)
         self.last_face_bbox=None
@@ -677,29 +753,50 @@ class CameraWidget(QtWidgets.QWidget):
 
         # handle collections
         now=time.time()
-        if self.collect_face and self.last_face_bbox:
-            if now - self.collect_face['last'] >= 0.2:
-                x,y,w,h=self.last_face_bbox
-                gray=cv2.cvtColor(bgr,cv2.COLOR_BGR2GRAY)
-                self.facedb.enroll(gray,x,y,w,h,self.collect_face['name'])
-                self.collect_face['col']+=1; self.collect_face['last']=now
-                if self.collect_face['col']>=self.collect_face['n']:
-                    self.facedb.load(); self.collect_face=None; self.lbl_status.setText('Face collection done')
-        if self.collect_pet:
-            if now - self.collect_pet['last'] >= 0.25:
-                # choose largest of desired species
-                species=self.collect_pet['sp']
-                candidates=[(x,y,w,h) for (cls,conf,x,y,w,h) in dets if cls==species]
-                if candidates:
-                    bx=max(candidates,key=lambda b:b[2]*b[3])
-                    x,y,w,h=bx
-                    roi=bgr[max(0,y):y+h, max(0,x):x+w]
-                    self.pets.enroll(roi,self.collect_pet['name'],species)
-                    self.collect_pet['col']+=1; self.collect_pet['last']=now
-                    if self.collect_pet['col']>=self.collect_pet['n']:
-                        self.pets.load(); self.collect_pet=None; self.lbl_status.setText('Pet collection done')
 
-        # show
+        # ---- Face collection progress & feedback ----
+        if self.collect_face:
+            name = self.collect_face['name']
+            if self.last_face_bbox and (now - self.collect_face['last'] >= 0.2):
+                x,y,w,h=self.last_face_bbox
+                gray=cv2.cvtColor(raw_bgr,cv2.COLOR_BGR2GRAY)
+                if self.facedb.enroll(gray,x,y,w,h,name):
+                    self.collect_face['col']+=1; self.collect_face['last']=now
+            # Update status every frame
+            col = self.collect_face['col']; n = self.collect_face['n']
+            if col >= n:
+                self.facedb.load(); self.collect_face=None
+                self._update_collect_dialog(f'Face collection done: {name} ({n}/{n})', done=True)
+            else:
+                suffix = '' if self.last_face_bbox else ' (waiting for face)'
+                self._update_collect_dialog(f'Collecting face: {name} {col}/{n}{suffix}')
+        # ---- Pet collection progress & feedback ----
+        if self.collect_pet:
+            species=self.collect_pet['sp']; name=self.collect_pet['name']
+            # choose largest of desired species among current detections
+            candidates=[(x,y,w,h) for (cls,conf,x,y,w,h) in dets if cls==species]
+            if now - self.collect_pet['last'] >= 0.15 and candidates:
+                bx=max(candidates,key=lambda b:b[2]*b[3])
+                x,y,w,h=bx
+                roi=raw_bgr[max(0,y):y+h, max(0,x):x+w]
+                if self.pets.enroll(roi,name,species):
+                    self.collect_pet['col']+=1; self.collect_pet['last']=now
+            # Update status every frame
+            col = self.collect_pet['col']; n = self.collect_pet['n']
+            if col >= n:
+                self.pets.load(); self.collect_pet=None
+                self._update_collect_dialog(f'Pet collection done: {species}:{name} ({n}/{n})', done=True)
+            else:
+                self._update_collect_dialog(f'Collecting {species}: {name} {col}/{n}' + ('' if candidates else ' (waiting)'))
+
+        # Update presence and events with dog identities if available
+        try:
+            dog_names = {nm for (nm,sc,x,y,w,h) in recognized_dogs}
+            self._update_presence(dets, faces, now, dog_names)
+        except Exception:
+            pass
+
+        # show (draw overlays after collection saving used raw_bgr)
         rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
         h, w, ch = rgb.shape
         img = QtGui.QImage(rgb.data, w, h, ch*w, QtGui.QImage.Format.Format_RGB888)
@@ -749,6 +846,13 @@ class CameraWidget(QtWidgets.QWidget):
                 self._aim_timer.stop()
         except Exception:
             pass
+        # Close collection dialog if open
+        try:
+            if getattr(self, 'collect_dlg', None):
+                self.collect_dlg.accept()
+                self.collect_dlg = None
+        except Exception:
+            pass
         # Stop recording and threads
         self.stop_recording()
         self.stop_stream()
@@ -769,6 +873,27 @@ class CameraWidget(QtWidgets.QWidget):
             pass
         super().closeEvent(e)
 
+    # ----- collection UI helpers (popup dialog) -----
+    def _ensure_collect_dialog(self, title: str):
+        if self.collect_dlg is None:
+            self.collect_dlg = CollectionDialog(self, title)
+            self.collect_dlg.stopClicked.connect(self.stop_collection)
+            self.collect_dlg.show()
+
+    def _update_collect_dialog(self, text: str, done: bool = False):
+        if self.collect_dlg is None:
+            # if collection active but dialog missing, create it
+            if self.collect_face or self.collect_pet:
+                self._ensure_collect_dialog('Collection')
+        if self.collect_dlg is not None:
+            try:
+                self.collect_dlg.set_status(text)
+                if done:
+                    # auto-close after short delay
+                    QtCore.QTimer.singleShot(600, lambda: (self.collect_dlg and self.collect_dlg.accept(), setattr(self, 'collect_dlg', None)))
+            except Exception:
+                pass
+
     # ----- actions
     def do_enroll_face(self, name: str | None = None):
         if not self.last_face_bbox:
@@ -782,13 +907,16 @@ class CameraWidget(QtWidgets.QWidget):
             self.lbl_status.setText('No frame')
             return
         # Best-effort enroll from last frame already handled in on_frame
-        self.facedb.load(); self.lbl_status.setText(f'Enrolled {name}')
+        self.facedb.load(); self.lbl_status.setText(f'Enrolled face: {name}')
 
     def do_collect_face(self, name: str | None = None, n: int = 20):
         if name is None:
             name=self.ed_name.text().strip() or 'person'
-        self.collect_face={'name':name,'n':20,'col':0,'last':0.0}
-        self.lbl_status.setText(f'Collecting face: {name}')
+        # Cancel any ongoing pet collection
+        self.collect_pet = None
+        self.collect_face={'name':name,'n':int(n or 20),'col':0,'last':0.0}
+        self._ensure_collect_dialog('Face Collection')
+        self._update_collect_dialog(f'Collecting face: {name} 0/{int(n or 20)}')
 
     def do_enroll_pet(self, name: str | None = None, species: str | None = None):
         sp= species or self.cmb_species.currentText()
@@ -807,8 +935,23 @@ class CameraWidget(QtWidgets.QWidget):
     def do_collect_pet(self, name: str | None = None, species: str | None = None, n: int = 40):
         sp= species or self.cmb_species.currentText()
         name= (name or self.ed_name.text().strip()) or 'pet'
-        self.collect_pet={'name':name,'sp':sp,'n':n,'col':0,'last':0.0}
-        self.lbl_status.setText(f'Collecting {sp}: {name}')
+        # Cancel any ongoing face collection
+        self.collect_face = None
+        self.collect_pet={'name':name,'sp':sp,'n':int(n or 40),'col':0,'last':0.0}
+        self._ensure_collect_dialog('Pet Collection')
+        self._update_collect_dialog(f'Collecting {sp}: {name} 0/{int(n or 40)}')
+
+    def stop_collection(self):
+        had_face = self.collect_face is not None
+        had_pet  = self.collect_pet is not None
+        self.collect_face = None
+        self.collect_pet = None
+        if self.collect_dlg:
+            try:
+                self.collect_dlg.accept()
+            except Exception:
+                pass
+            self.collect_dlg = None
 
     # ----- management helpers
     def _select_and_delete_images(self, root_dir: str, title: str):
@@ -855,6 +998,7 @@ class CameraWidget(QtWidgets.QWidget):
         # Update tracker using detections
         now = time.time()
         self.tracker.update(dets, now)
+        # Presence update moved to on_frame where dog identity is available
 
     def aim_at_target(self):
         # Aim at cats only; use simple proportional step toward center
@@ -894,6 +1038,74 @@ class CameraWidget(QtWidgets.QWidget):
         except Exception:
             pass
 
+    # ----- presence + event logging -----
+    def _log_event(self, text: str):
+        ts = time.strftime('%Y-%m-%d %H:%M:%S')
+        line = f"[{ts}] {text}"
+        # buffer
+        self.event_buffer.append(line)
+        if len(self.event_buffer) > 200:
+            self.event_buffer = self.event_buffer[-200:]
+        # file
+        try:
+            with open(self.log_path, 'a', encoding='utf-8') as f:
+                f.write(line + "\n")
+        except Exception:
+            pass
+        # signal for sidebar
+        try:
+            self.eventLogged.emit(line)
+        except Exception:
+            pass
+
+    def _update_presence(self, dets, faces, now: float, dog_names: set[str] | None = None):
+        seen_ids = set()
+        # Recognized faces (skip 'unknown') with minimum confidence
+        for (name, score, x, y, w, h) in faces:
+            try:
+                if name and name != 'unknown' and float(score) >= 0.2:
+                    seen_ids.add(f"face:{name}")
+            except Exception:
+                continue
+        # Dogs (recognized names if provided, else generic)
+        try:
+            if dog_names:
+                for nm in dog_names:
+                    if nm and nm != 'unknown':
+                        seen_ids.add(f"pet:{nm}")
+            else:
+                if any(cls == 'dog' for (cls, conf, x, y, w, h) in dets):
+                    seen_ids.add('dog')
+        except Exception:
+            pass
+
+        # Update seen -> present
+        for pid in seen_ids:
+            p = self.presence.get(pid)
+            if not p or not p.get('present'):
+                self.presence[pid] = {'present': True, 'enter': now, 'last': now, 'missing_since': None}
+                subj = pid.split(':', 1)[1] if (pid.startswith('face:') or pid.startswith('pet:')) else 'dog'
+                self._log_event(f"{subj} detected")
+            else:
+                p['last'] = now
+                p['missing_since'] = None
+
+        # Handle not-seen -> maybe exit (with hysteresis)
+        for pid, p in list(self.presence.items()):
+            if p.get('present') and pid not in seen_ids:
+                if p.get('missing_since') is None:
+                    p['missing_since'] = now
+                else:
+                    if (now - p['missing_since']) >= self.grace_sec:
+                        # Mark exit
+                        duration = max(0.0, (p.get('last') or now) - (p.get('enter') or now))
+                        subj = pid.split(':', 1)[1] if (pid.startswith('face:') or pid.startswith('pet:')) else 'dog'
+                        self._log_event(f"{subj} exited after {duration:.1f}s")
+                        p['present'] = False
+                        p['enter'] = None
+                        p['last'] = None
+                        p['missing_since'] = None
+
 
 class DetectionThread(QtCore.QThread):
     resultsReady = QtCore.Signal(list, list)  # dets, faces
@@ -925,12 +1137,16 @@ class DetectionThread(QtCore.QThread):
             dets=[]; faces=[]
             try:
                 # Skip YOLO on some cycles if we already have active tracks (object permanence)
+                # But when collecting pet samples, force YOLO every cycle for more samples
                 do_yolo = True
-                if self.w.tracker.has_active():
-                    if self._skip_cycles < self.max_skip_cycles:
-                        do_yolo = False; self._skip_cycles += 1
-                    else:
-                        self._skip_cycles = 0
+                if not self.w.collect_pet:
+                    if self.w.tracker.has_active():
+                        if self._skip_cycles < self.max_skip_cycles:
+                            do_yolo = False; self._skip_cycles += 1
+                        else:
+                            self._skip_cycles = 0
+                else:
+                    self._skip_cycles = 0
                 if do_yolo and self.w.chk_yolo.isChecked() and self.w.yolo.available():
                     dets = self.w.yolo.detect(frame)
                 # Face detection/recognition
@@ -1031,6 +1247,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self.resize(1200, 800)
         self.mdi = QtWidgets.QMdiArea()
         self.setCentralWidget(self.mdi)
+        # Events sidebar (shows events for active camera)
+        self.eventsDock = QtWidgets.QDockWidget('Events', self)
+        self.eventsView = QtWidgets.QListWidget()
+        self.eventsDock.setWidget(self.eventsView)
+        self.addDockWidget(QtCore.Qt.RightDockWidgetArea, self.eventsDock)
+        self._active_cam_ref = None
+        try:
+            self.mdi.subWindowActivated.connect(self.on_sub_activated)
+        except Exception:
+            pass
 
         # Menu bar
         mb = self.menuBar()
@@ -1131,6 +1357,42 @@ class MainWindow(QtWidgets.QMainWindow):
         act_collect_face.triggered.connect(self.collect_face_active)
         act_enroll_pet.triggered.connect(self.enroll_pet_active)
         act_collect_pet.triggered.connect(self.collect_pet_active)
+
+    @QtCore.Slot(QtWidgets.QMdiSubWindow)
+    def on_sub_activated(self, sub):
+        # Rebind events view to the active camera widget
+        try:
+            if self._active_cam_ref:
+                try:
+                    self._active_cam_ref.eventLogged.disconnect(self._on_event_line)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        w = sub.widget() if sub else None
+        if isinstance(w, CameraWidget):
+            self._active_cam_ref = w
+            try:
+                w.eventLogged.connect(self._on_event_line)
+            except Exception:
+                pass
+            # Refresh list from widget buffer
+            self.eventsView.clear()
+            try:
+                for line in getattr(w, 'event_buffer', []):
+                    self.eventsView.addItem(line)
+                if self.eventsView.count() > 0:
+                    self.eventsView.scrollToBottom()
+            except Exception:
+                pass
+        else:
+            self._active_cam_ref = None
+            self.eventsView.clear()
+
+    @QtCore.Slot(str)
+    def _on_event_line(self, line: str):
+        self.eventsView.addItem(line)
+        self.eventsView.scrollToBottom()
 
     # -------- Tools --------
     def download_yolo_model(self):

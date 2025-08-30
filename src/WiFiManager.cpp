@@ -469,8 +469,13 @@ static void renderWiFiPage(AsyncWebServerRequest* req, const String& msg = "") {
           "<input id='auser' name='auser' type='text' value='" + g_authUser + "' placeholder='(default admin)'>"
           "</div>";
   html += "<div class='row'><label for='apass'>Access Password</label>"
-          "<input id='apass' name='apass' type='password' placeholder='" + String(isAuthEnabled()?"(set to change or clear)":"(leave empty to keep open)") + "'>"
+          "<input id='apass' name='apass' type='password' placeholder='" + String(isAuthEnabled()?"(leave empty to keep current)":"(set to enable protection)") + "'>"
           "<button type='button' class='btn' onclick=\"const a=document.getElementById('apass');a.type=a.type==='password'?'text':'password'\">Show/Hide</button>"
+          "</div>";
+  // Explicit clear option to avoid accidental resets when changing Wi-Fi
+  html += "<div class='row'><label for='aclear'>Clear Password</label>"
+          "<input id='aclear' name='aclear' type='checkbox'>"
+          "<span class='hint'>(check to remove credentials)</span>"
           "</div>";
   // Token (read-only)
   {
@@ -496,6 +501,36 @@ static void renderWiFiPage(AsyncWebServerRequest* req, const String& msg = "") {
   html += "<div class='right'><button class='btn ok' type='submit'>Save &amp; Reboot</button></div>";
   html += "<div id='saving' class='row hint' style='display:none'>Saving… Rebooting…</div>";
   html += "</form></div>";
+
+  // Panel: Known Networks (MRU)
+  {
+    String ssids[MRU_MAX]; String passes[MRU_MAX]; int n = 0;
+    loadMRU(ssids, passes, n);
+    html += "<div class='panel'><h3>Known Networks</h3>";
+    if (n == 0) {
+      html += "<div class='row hint'>No saved networks yet.</div>";
+    } else {
+      for (int i = 0; i < n; ++i) {
+        String tag = (i == 0) ? String("<b>(current)</b>") : String("");
+        html += "<div class='row'>";
+        html += String("<label>") + String(i+1) + String(".</label>");
+        html += "<span class='mono'>" + ssids[i] + "</span> ";
+        if (i == 0) {
+          html += tag;
+        } else {
+          html += tag;
+          // Small inline form to select this entry as active
+          html += "<form method='POST' action='/wifi/select' style='margin:0'>";
+          html += String("<input type='hidden' name='sel' value='") + String(i) + String("'>");
+          html += "<button class='btn' type='submit'>Make Active</button>";
+          html += "</form>";
+        }
+        html += "</div>";
+      }
+      html += "<div class='row hint'>Selecting a network moves it to the top and reboots, connecting to it on startup.</div>";
+    }
+    html += "</div>"; // panel
+  }
 
   // Panel: Actions
   html += "<div class='panel'><h3>Actions</h3>";
@@ -553,6 +588,7 @@ static void registerWiFiRoutes() {
     }
     String newSsid, newPass;
     String newAuthUser, newAuthPass;
+    bool   clearAuth = false;
     bool   newUseStatic = false;
     String newIP, newGW, newSN, newDNS;
 
@@ -560,21 +596,22 @@ static void registerWiFiRoutes() {
     if (req->hasParam("pass", true)) newPass = req->getParam("pass", true)->value();
     if (req->hasParam("auser", true)) newAuthUser = req->getParam("auser", true)->value();
     if (req->hasParam("apass", true)) newAuthPass = req->getParam("apass", true)->value();
+    if (req->hasParam("aclear", true)) clearAuth = true;
     if (req->hasParam("ustatic", true)) newUseStatic = true;
     if (req->hasParam("ip",   true)) newIP  = req->getParam("ip",  true)->value();
     if (req->hasParam("gw",   true)) newGW  = req->getParam("gw",  true)->value();
     if (req->hasParam("sn",   true)) newSN  = req->getParam("sn",  true)->value();
     if (req->hasParam("dns",  true)) newDNS = req->getParam("dns", true)->value();
 
+    // Save Wi-Fi MRU (does not touch other namespaces)
     saveCreds(newSsid, newPass);
-    if (req->hasParam("apass", true)) {
-      if (newAuthPass.length() == 0) {
-        // disable auth (hashed + legacy)
-        disableAuth();
-      } else {
-        saveAuth(newAuthUser, newAuthPass);
-      }
-    }
+    // Auth changes are explicit-only now: either clear, or set a new password
+    if (clearAuth) {
+      disableAuth();
+    } else if (req->hasParam("apass", true) && newAuthPass.length() > 0) {
+      // If password field provided and non-empty, set/replace credentials
+      saveAuth(newAuthUser, newAuthPass);
+    } // else: leave existing auth untouched
     // Persist network settings
     preferences.begin("wifi", false);
     preferences.putBool("static", newUseStatic);
@@ -610,6 +647,46 @@ static void registerWiFiRoutes() {
     html += "</div></body></html>";
     req->send(200, "text/html", html);
     delay(300);
+    ESP.restart();
+  });
+
+  // Select an MRU entry to make active (move to front and reboot)
+  g_server.on("/wifi/select", HTTP_POST, [](AsyncWebServerRequest* req){
+    if (!isAuthorized(req) && isAuthEnabled()) {
+      AsyncWebServerResponse* r = req->beginResponse(401, "text/plain", "Unauthorized");
+      r->addHeader("WWW-Authenticate", "Basic realm=\"ESP32Cam\"");
+      req->send(r);
+      return;
+    }
+
+    if (!req->hasParam("sel", true)) {
+      req->send(400, "text/plain", "Missing selection");
+      return;
+    }
+    int idx = req->getParam("sel", true)->value().toInt();
+    String ssids[MRU_MAX]; String passes[MRU_MAX]; int n = 0;
+    loadMRU(ssids, passes, n);
+    if (idx < 0 || idx >= n) {
+      req->send(400, "text/plain", "Invalid selection");
+      return;
+    }
+    if (idx != 0) {
+      mruMoveToFront(ssids, passes, n, idx);
+      saveMRUList(ssids, passes, n);
+    }
+
+    String html;
+    html.reserve(2000);
+    html += "<!doctype html><html><head><meta charset='utf-8'><title>Switching…</title>";
+    html += kStyle;
+    html += "<meta http-equiv='refresh' content='3;url=/wifi'>";
+    html += "</head><body><div class='wrap'>";
+    html += "<div class='nav'><a class='btn' href='/cam'>Camera</a></div>";
+    html += "<div class='panel'><h3>Switching Network</h3><div class='row'><span class='hint'>Rebooting to connect…</span></div></div>";
+    html += "</div></body></html>";
+    req->send(200, "text/html", html);
+
+    delay(500);
     ESP.restart();
   });
 
