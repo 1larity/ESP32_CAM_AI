@@ -248,6 +248,20 @@ void startCameraServer() {
     req->send(200, "application/json", json);
   });
 
+  // Discovery endpoint (no auth) for local scans
+  camServer.on("/api/advertise", HTTP_GET, [](AsyncWebServerRequest* req){
+    // No auth; minimal info only
+    String ip = WiFi.localIP().toString();
+    String json = "{";
+    json += "\"name\":\"ESP32-CAM\",";
+    json += "\"ip\":\"" + ip + "\",";
+    json += "\"stream\":\"http://" + ip + ":81/stream\"";
+    json += "}";
+    auto* r = req->beginResponse(200, "application/json", json);
+    r->addHeader("Access-Control-Allow-Origin", "*");
+    req->send(r);
+  });
+
   // MJPEG stream on port 80 (proxy endpoint using shared broker)
 #if STREAM_BROKER && defined(ENABLE_PORT80_STREAM) && (ENABLE_PORT80_STREAM==1)
   camServer.on("/stream", HTTP_GET, [](AsyncWebServerRequest *request){
