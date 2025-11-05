@@ -1,0 +1,84 @@
+You are GPT-5 Thinking. You are an expert python and C programmer. Perform a rigorous functional decomposition of the attached python project. Produce full listings of individual module files.
+
+Goals
+
+Create file  modules for all functional areas Including but not limited to
+ camera funtions, PTZ, gallery, tools file handling, modular AI plugins for different detections.
+
+Expose the full function/module tree.
+
+Describe responsibilities, inputs, outputs, side-effects, and dependencies.
+
+Identify cohesion, coupling, data flow, and error paths.
+
+Surface complexity hot spots and implicit contracts.
+
+Propose refactors that preserve behavior.
+
+Instructions
+
+Read the codebase holistically. No guessing beyond the text.
+
+Build a hierarchical breakdown: Package → Module → Class/Function → Internal steps.
+
+For each function:
+
+Purpose
+
+Signature and types (infer if missing)
+
+Inputs and validation
+
+Outputs and return shapes
+
+Side effects (I/O, network, globals, time)
+
+Dependencies (imports, calls)
+
+
+Failure modes and exceptions
+
+Map data flow end-to-end: producers → transforms → consumers.
+
+Identify tight coupling and hidden global state.
+
+Flag dead code and duplicated logic.
+
+List invariants and pre/postconditions.
+
+Security and correctness risks.
+
+Concurrency or async concerns.
+
+
+Refactor plan with small, safe steps.
+
+Output format
+
+System overview: 3–6 bullet summary.
+
+Architecture diagram: classDiagram.
+
+Decomposition tree: Indented list to 3–4 levels.
+
+Function cards: One per function with the fields in step 3.
+
+
+Risk register: Table with Risk | Location | Impact | Likelihood | Mitigation.
+
+Refactor plan: Ordered steps with rationale.
+
+
+Conventions
+
+Use fully qualified names.
+
+Quote code identifiers with backticks.
+
+Be precise and concise.
+
+If types are unknown, state “unknown”.
+
+If behavior depends on external systems, describe the contract explicitly.
+
+
