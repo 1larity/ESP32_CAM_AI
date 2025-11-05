@@ -1,4 +1,755 @@
+## Prompt for Copilot
+```
+This goes with the python app
+```
+# Packaged Project (C/C++)
+- **Project root**: C:\Users\stellaris\Documents\PlatformIO\Projects\ESP32_CAM_AI\src
+- **Generated**: 2025-11-04 16:28:36 +0000
+- **Tool**: Copilot Python Packager v1.6
+## Table of contents
+- `CameraServer.cpp`
+- `CameraServer.h`
+- `main.cpp`
+- `OTAHandler.cpp`
+- `OTAHandler.h`
+- `StreamServer.cpp`
+- `StreamServer.h`
+- `Utils.cpp`
+- `Utils.h`
+- `WiFiManager.cpp`
+- `WiFiManager.h`
+---
+## `CameraServer.cpp`
+**Absolute path**: C:\Users\stellaris\Documents\PlatformIO\Projects\ESP32_CAM_AI\src\CameraServer.cpp
+**Size**: 12030 bytes
+**Modified**: 2025-10-23 23:09:24 +0100
+**SHA256**: 7c190707f23dcb9a45e3bc0d1e3869f871ccf2a3b418495a6018d551c0ade118
+``````cpp#include "WiFiManager.h"
+#include "CameraServer.h"
+#include "OTAHandler.h"
+#include "Utils.h"
+
+#include "esp_camera.h"
+#include <WiFi.h>
+#include <ESPAsyncWebServer.h>
+#include <Preferences.h>
+#include <vector>
+#include <memory>
+
+#include "StreamServer.h"
+
+// ===== PTZ pins =====
+#define SERVO_1 14
+#define SERVO_2 15
+
+// ===== PTZ state (servo objects are defined in Utils.cpp) =====
+// servo1 and servo2 are declared extern in Utils.h and defined in Utils.cpp
+static int servo1Pos = 90;
+static int servo2Pos = 90;
+
+// ===== Resolution options with actual pixel sizes =====
+struct ResolutionOption {
+  framesize_t size;
+  const char* name;
+  uint16_t    w;
+  uint16_t    h;
+};
+
+// From highest to lowest (safe set for OV2640)
+static const std::vector<ResolutionOption> resolutionOptions = {
+  {FRAMESIZE_UXGA,  "UXGA",   1600,1200},
+  {FRAMESIZE_SXGA,  "SXGA",   1280,1024},
+  {FRAMESIZE_XGA,   "XGA",    1024,768},
+  {FRAMESIZE_SVGA,  "SVGA",   800, 600},
+  {FRAMESIZE_VGA,   "VGA",    640, 480},
+  {FRAMESIZE_CIF,   "CIF",    352, 288},
+  {FRAMESIZE_QVGA,  "QVGA",   320, 240},
+  {FRAMESIZE_HQVGA, "HQVGA",  240, 176},
+  {FRAMESIZE_QQVGA, "QQVGA",  160, 120},
+};
+
+static inline int clamp180(int v) {
+  if (v < 0) return 0;
+  if (v > 180) return 180;
+  return v;
+}
+
+// ===== Persistence =====
+static Preferences camPrefs;
+static const char* CAM_NS  = "camera";
+static const char* KEY_RES = "res";  // framesize_t stored as uint8_t
+
+static const ResolutionOption* findOptionByName(const String& n) {
+  for (const auto& o : resolutionOptions) {
+    if (n.equalsIgnoreCase(o.name)) return &o;
+  }
+  return nullptr;
+}
+
+static const ResolutionOption* findOptionBySize(framesize_t fs) {
+  for (const auto& o : resolutionOptions) if (o.size == fs) return &o;
+  return nullptr;
+}
+
+// ===== Simple pale-blue UI theme (CSS only; no stream changes) =====
+static const char* kStyle = R"CSS(
+  <style>
+    :root{
+      --bg:#eaf4ff; --panel:#ffffff; --text:#102a43; --muted:#486581; --accent:#2b6cb0;
+      --line:#cfe3ff; --shadow:0 1px 4px rgba(16,42,67,.08);
+    }
+    *{box-sizing:border-box}
+    html,body{margin:0;padding:0;background:var(--bg);color:var(--text);
+      font-family:system-ui,-apple-system,"Segoe UI",Roboto,Ubuntu,"Helvetica Neue",Arial,sans-serif}
+    .wrap{max-width:980px;margin:20px auto;padding:0 12px}
+    .nav{display:flex;gap:8px;justify-content:flex-end;margin:6px 0 16px 0}
+    .btn{appearance:none;border:1px solid var(--line);padding:8px 12px;border-radius:8px;
+      background:#d9ebff;cursor:pointer;font-weight:600;box-shadow:var(--shadow);text-decoration:none;color:inherit}
+    .btn:hover{background:#cfe3ff}
+    .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+      box-shadow:var(--shadow);padding:14px 14px 16px 14px;margin:14px 0}
+    .panel h3{margin:0 0 10px 0;color:var(--accent)}
+    .row{margin:8px 0}
+    select,button{font-size:1rem;padding:6px 10px;border-radius:8px;border:1px solid var(--line)}
+    img.stream{max-width:100%;height:auto;border:1px solid var(--line);border-radius:10px}
+    pre{background:#f7fbff;border:1px solid var(--line);border-radius:8px;padding:8px;display:block}
+    label{color:var(--muted);margin-right:6px}
+  </style>
+)CSS";
+
+// ===== Web UI & API =====
+static void renderCameraPage(AsyncWebServerRequest* request) {
+  sensor_t* s = esp_camera_sensor_get();
+  framesize_t cur = s ? s->status.framesize : FRAMESIZE_VGA;
+
+  String html;
+  html.reserve(7000);
+  html += "<!doctype html><html><head><meta charset='utf-8'><title>ESP32-CAM</title>";
+  html += kStyle;
+  html += "</head><body><div class='wrap'>";
+
+  // Small nav: Wi-Fi Settings
+  html += "<div class='nav'>"
+          "<a class='btn' href='/wifi'>Wi-Fi Settings</a>"
+          "</div>";
+
+  // PANEL: Controls
+  html += "<div class='panel'><h3>Camera Controls</h3>";
+  html += "<div class='row'><label for='res'>Resolution</label>"
+          "<select id='res' onchange=\"fetch('/resolution?set='+this.value).then(()=>location.reload())\">";
+  for (const auto& o : resolutionOptions) {
+    bool sel = (o.size == cur);
+    html += "<option value='" + String(o.name) + "'" + (sel ? " selected" : "") + ">"
+            + String(o.name) + " (" + String(o.w) + "&times;" + String(o.h) + ")</option>";
+  }
+  html += "</select></div>";
+
+  html += "<div class='row'>"
+          "<button class='btn' onclick=\"fetch('/action?go=up')\">Up</button> "
+          "<button class='btn' onclick=\"fetch('/action?go=down')\">Down</button> "
+          "<button class='btn' onclick=\"fetch('/action?go=left')\">Left</button> "
+          "<button class='btn' onclick=\"fetch('/action?go=right')\">Right</button>"
+          "</div>";
+  html += "</div>"; // panel
+
+  // PANEL: Live Video
+  html += "<div class='panel'><h3>Live Video</h3>";
+  {
+    // Use token when auth is enabled so the <img> can load cross-port
+    String streamURL = String("http://") + WiFi.localIP().toString() + ":81/stream";
+    if (isAuthEnabled()) {
+      String tok = getAuthTokenParam();
+      if (tok.length() > 0) streamURL += "?token=" + tok;
+    }
+    html += "<img class='stream' src='" + streamURL + "' alt='Video stream'>";
+  }
+  html += "</div>";
+
+  // PANEL: Status
+  html += "<div class='panel'><h3>Status</h3><pre id='st'>Loading…</pre></div>"
+          "<script>fetch('/api/status').then(r=>r.json()).then(j=>{"
+          "document.getElementById('st').textContent=JSON.stringify(j,null,2);});</script>";
+
+  html += "</div></body></html>";
+  request->send(200, "text/html", html);
+}
+
+void startCameraServer() {
+  // Reuse singleton AsyncWebServer from WiFiManager (port 80)
+  AsyncWebServer& camServer = getWebServer();
+
+  // Main page: render skinned UI
+  camServer.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
+    if (!isAuthorized(request)) {
+      auto* r = request->beginResponse(401, "text/plain", "Unauthorized");
+      r->addHeader("WWW-Authenticate", "Basic realm=\"ESP32Cam\"");
+      request->send(r);
+      return;
+    }
+    renderCameraPage(request);
+  });
+
+  // Alias so AP page can link back as "/cam" later without touching other files
+  camServer.on("/cam", HTTP_GET, [](AsyncWebServerRequest *request){
+    if (!isAuthorized(request)) {
+      auto* r = request->beginResponse(401, "text/plain", "Unauthorized");
+      r->addHeader("WWW-Authenticate", "Basic realm=\"ESP32Cam\"");
+      request->send(r);
+      return;
+    }
+    renderCameraPage(request);
+  });
+
+  // Change resolution + persist
+  camServer.on("/resolution", HTTP_GET, [](AsyncWebServerRequest *request){
+    if (!isAuthorized(request)) {
+      auto* r = request->beginResponse(401, "text/plain", "Unauthorized");
+      r->addHeader("WWW-Authenticate", "Basic realm=\"ESP32Cam\"");
+      request->send(r);
+      return;
+    }
+    if (!request->hasParam("set")) {
+      request->send(400, "text/plain", "Missing ?set=");
+      return;
+    }
+
+    const String target = request->getParam("set")->value();
+    const auto* opt = findOptionByName(target);
+    if (!opt) { request->send(400, "text/plain", "Invalid resolution"); return; }
+
+    sensor_t* s = esp_camera_sensor_get();
+    if (!s) { request->send(500, "text/plain", "Sensor unavailable"); return; }
+
+    s->set_framesize(s, opt->size);
+
+    camPrefs.begin(CAM_NS, false);
+    camPrefs.putUChar(KEY_RES, static_cast<uint8_t>(opt->size));
+    camPrefs.end();
+
+    request->send(200, "text/plain", "OK");
+  });
+
+  // PTZ actions
+  camServer.on("/action", HTTP_GET, [](AsyncWebServerRequest *request){
+    if (!isAuthorized(request)) {
+      auto* r = request->beginResponse(401, "text/plain", "Unauthorized");
+      r->addHeader("WWW-Authenticate", "Basic realm=\"ESP32Cam\"");
+      request->send(r);
+      return;
+    }
+    if (request->hasParam("go")) {
+      String dir = request->getParam("go")->value();
+      if (dir == "up")          servo1Pos = clamp180(servo1Pos + 10);
+      else if (dir == "down")   servo1Pos = clamp180(servo1Pos - 10);
+      else if (dir == "left")   servo2Pos = clamp180(servo2Pos + 10);
+      else if (dir == "right")  servo2Pos = clamp180(servo2Pos - 10);
+      servo1.write(servo1Pos);
+      servo2.write(servo2Pos);
+    }
+    request->send(200, "text/plain", "OK");
+  });
+
+  // JSON status (handy for your PC viewer)
+  camServer.on("/api/status", HTTP_GET, [](AsyncWebServerRequest* req){
+    if (!isAuthorized(req)) {
+      auto* r = req->beginResponse(401, "text/plain", "Unauthorized");
+      r->addHeader("WWW-Authenticate", "Basic realm=\"ESP32Cam\"");
+      req->send(r);
+      return;
+    }
+    sensor_t* s = esp_camera_sensor_get();
+    framesize_t fs = s ? s->status.framesize : FRAMESIZE_INVALID;
+    const auto* cur = findOptionBySize(fs);
+
+    String json = "{";
+    json += "\"ip\":\"" + WiFi.localIP().toString() + "\"";
+    if (cur) {
+      json += ",\"resolution\":\"" + String(cur->name) + "\"";
+      json += ",\"width\":" + String(cur->w) + ",\"height\":" + String(cur->h);
+    }
+    json += "}";
+    req->send(200, "application/json", json);
+  });
+
+  // Discovery endpoint (no auth) for local scans
+  camServer.on("/api/advertise", HTTP_GET, [](AsyncWebServerRequest* req){
+    // No auth; minimal info only
+    String ip = WiFi.localIP().toString();
+    String json = "{";
+    json += "\"name\":\"ESP32-CAM\",";
+    json += "\"ip\":\"" + ip + "\",";
+    json += "\"stream\":\"http://" + ip + ":81/stream\"";
+    json += "}";
+    auto* r = req->beginResponse(200, "application/json", json);
+    r->addHeader("Access-Control-Allow-Origin", "*");
+    req->send(r);
+  });
+
+  // Ensure the shared web server is listening (STA mode path)
+  ensureWebServerStarted();
+}
+
+// ===== Camera init (unchanged) =====
+void setupCamera() {
+  camera_config_t config;
+  config.ledc_channel = LEDC_CHANNEL_0;
+  config.ledc_timer   = LEDC_TIMER_0;
+  config.pin_d0       = 5;
+  config.pin_d1       = 18;
+  config.pin_d2       = 19;
+  config.pin_d3       = 21;
+  config.pin_d4       = 36;
+  config.pin_d5       = 39;
+  config.pin_d6       = 34;
+  config.pin_d7       = 35;
+  config.pin_xclk     = 0;
+  config.pin_pclk     = 22;
+  config.pin_vsync    = 25;
+  config.pin_href     = 23;
+  config.pin_sccb_sda = 26;
+  config.pin_sccb_scl = 27;
+  config.pin_pwdn     = 32;
+  config.pin_reset    = -1;
+  config.xclk_freq_hz = 20000000;
+  config.pixel_format = PIXFORMAT_JPEG;
+
+  bool psram = psramFound();
+  bool found = false;
+
+  // Try from high to low until one initialises
+  for (const auto& option : resolutionOptions) {
+    config.frame_size   = option.size;
+    config.jpeg_quality = psram ? 10 : 12;
+    config.fb_count     = psram ? 2 : 1;
+
+    // ensure clean state between attempts
+    esp_camera_deinit();
+    delay(50);
+
+    esp_err_t err = esp_camera_init(&config);
+    if (err == ESP_OK) {
+      Serial.printf("Camera initialized with resolution: %s\n", option.name);
+      found = true;
+      break;
+    } else {
+      Serial.printf("Failed to init with %s (%d), trying lower...\n", option.name, err);
+    }
+  }
+
+  if (!found) {
+    Serial.println("Camera init failed for all resolutions.");
+    return;
+  }
+
+  // Apply saved framesize (if any) AFTER successful init
+  camPrefs.begin(CAM_NS, true);
+  uint8_t saved = camPrefs.getUChar(KEY_RES, 0xFF);
+  camPrefs.end();
+  if (saved != 0xFF) {
+    sensor_t* s = esp_camera_sensor_get();
+    if (s) {
+      s->set_framesize(s, static_cast<framesize_t>(saved));
+      Serial.printf("Applied saved framesize id: %u\n", saved);
+    }
+  }
+
+  // PTZ init
+  setupServos();                 // sets 50Hz on both (from Utils.cpp)
+  servo1.attach(SERVO_1, 1000, 2000);
+  servo2.attach(SERVO_2, 1000, 2000);
+  servo1.write(servo1Pos);
+  servo2.write(servo2Pos);
+
+  // Start MJPEG stream on :81 (unchanged)
+  startStreamServer();
+}
+## `CameraServer.h`
+**Absolute path**: C:\Users\stellaris\Documents\PlatformIO\Projects\ESP32_CAM_AI\src\CameraServer.h
+**Size**: 245 bytes
+**Modified**: 2025-08-09 00:53:38 +0100
+**SHA256**: 848b618bb54a0f163c34e84f7b3bfa22c6202a06301bffc4280278cda472eba9
+``````c#ifndef CAMERA_SERVER_H
+#define CAMERA_SERVER_H
+
+// Configures camera hardware, PSRAM settings, and servo motors
+void setupCamera();
+
+// Launches the web interface for streaming and controlling servos
+void startCameraServer();
+
+#endif
+## `main.cpp`
+**Absolute path**: C:\Users\stellaris\Documents\PlatformIO\Projects\ESP32_CAM_AI\src\main.cpp
+**Size**: 843 bytes
+**Modified**: 2025-10-23 23:10:53 +0100
+**SHA256**: 621e05aa722610a998f62119c958d204c440bf1740a53b97351b7d410f92dd86
+``````cpp// esp32cam_main.cpp
+#include "Arduino.h"
 #include "WiFiManager.h"
+#include "CameraServer.h"
+#include "OTAHandler.h"
+#include "Utils.h"
+
+void setup() {
+  Serial.begin(115200);
+  disableBrownout();
+
+  // Removed early setupServos() call.
+  // Servos are initialised inside setupCamera() after camera init.
+  // setupServos();
+
+  // Start Wi-Fi; if it fails, launch configuration portal and skip rest
+  if (!connectToStoredWiFi()) {
+    startConfigPortal();
+    return;  // remain in portal mode until restart
+  }
+
+  // Now that WiFi is confirmed working
+  setupCamera();          // Camera init includes startStreamServer() and setupServos()
+  startCameraServer();    // Web UI (controls only)
+  setupOTA();             // OTA updater
+}
+
+void loop() {
+  handleOTA();             // optional depending on OTA lib
+}
+## `OTAHandler.cpp`
+**Absolute path**: C:\Users\stellaris\Documents\PlatformIO\Projects\ESP32_CAM_AI\src\OTAHandler.cpp
+**Size**: 1489 bytes
+**Modified**: 2025-08-27 23:38:07 +0100
+**SHA256**: fa0dfdf915e44d1ea9ea520ccddd3f59687483ebacfbbd111422951cc38c0bb4
+``````cpp#include <ArduinoOTA.h>
+#include <WiFi.h>
+#include "esp_camera.h" // Needed for esp_camera_deinit()
+
+void setupOTA() {
+  // Set the device name for OTA updates
+  ArduinoOTA.setHostname("ESP32Cam");
+
+  // Called when the OTA update starts
+  ArduinoOTA.onStart([]() {
+    // Deinit camera right before OTA begins to avoid memory/camera conflicts
+    esp_camera_deinit();
+    String type = ArduinoOTA.getCommand() == U_FLASH ? "sketch" : "filesystem";
+    Serial.println("Start updating " + type);
+  });
+
+  // Called when the OTA update finishes
+  ArduinoOTA.onEnd([]() {
+    Serial.println("\nUpdate complete.");
+  });
+
+  // Report OTA update progress
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    Serial.printf("Progress: %u%%\r", (progress * 100) / total);
+  });
+
+  // Handle OTA update errors
+  ArduinoOTA.onError([](ota_error_t error) {
+    Serial.printf("Error[%u]: ", error);
+    if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
+    else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
+    else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
+    else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
+    else if (error == OTA_END_ERROR) Serial.println("End Failed");
+  });
+
+  // Start OTA service
+  ArduinoOTA.begin();
+  Serial.println("OTA Ready");
+  Serial.print("IP address: ");
+  Serial.println(WiFi.localIP());
+}
+
+void handleOTA() {
+  ArduinoOTA.handle();
+}
+## `OTAHandler.h`
+**Absolute path**: C:\Users\stellaris\Documents\PlatformIO\Projects\ESP32_CAM_AI\src\OTAHandler.h
+**Size**: 160 bytes
+**Modified**: 2025-08-09 00:53:38 +0100
+**SHA256**: a435ddaa5d35f270f01bb25cf98e994ff8cca0db5fd6eee4e6749831a9186cb8
+``````c#ifndef OTA_HANDLER_H
+#define OTA_HANDLER_H
+
+// Initialize OTA functionality
+void setupOTA();
+
+// Process OTA update events
+void handleOTA();
+
+#endif
+## `StreamServer.cpp`
+**Absolute path**: C:\Users\stellaris\Documents\PlatformIO\Projects\ESP32_CAM_AI\src\StreamServer.cpp
+**Size**: 6354 bytes
+**Modified**: 2025-08-29 18:39:14 +0100
+**SHA256**: d45be7e3e3dc0a413382ca5855b9bd5bd1270832b27f6daac57ad135e25c2bcd
+``````cpp#include "StreamServer.h"
+#include "esp_camera.h"
+#include "esp_http_server.h"
+#include "WiFiManager.h"
+
+httpd_handle_t stream_httpd = NULL;
+
+// MIME type for MJPEG stream with frame boundary marker
+static const char* _STREAM_CONTENT_TYPE = "multipart/x-mixed-replace; boundary=frame";
+// Delimiter between JPEG frames in the multipart response
+static const char* _STREAM_BOUNDARY = "\r\n--frame\r\n";
+// Template for each part's headers indicating JPEG data and its length
+static const char* _STREAM_PART = "Content-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n";
+
+static esp_err_t stream_handler(httpd_req_t *req) {
+  camera_fb_t *fb = NULL;
+  esp_err_t res = ESP_OK;
+  char part_buf[64];
+
+  // Authorization: allow Basic header or ?token= param
+  if (isAuthEnabled()) {
+    bool ok = false;
+    // Check token in query string
+    int ql = httpd_req_get_url_query_len(req);
+    if (ql > 0) {
+      char* q = (char*)malloc(ql+1);
+      if (!q) return ESP_ERR_NO_MEM;
+      if (httpd_req_get_url_query_str(req, q, ql+1) == ESP_OK) {
+        char tbuf[128];
+        if (httpd_query_key_value(q, "token", tbuf, sizeof(tbuf)) == ESP_OK) {
+          ok = isValidTokenParam(tbuf);
+        }
+      }
+      free(q);
+    }
+    // Check Basic header if not ok yet
+    if (!ok) {
+      size_t alen = httpd_req_get_hdr_value_len(req, "Authorization");
+      if (alen > 0) {
+        char* abuf = (char*)malloc(alen+1);
+        if (!abuf) return ESP_ERR_NO_MEM;
+        if (httpd_req_get_hdr_value_str(req, "Authorization", abuf, alen+1) == ESP_OK) {
+          ok = isAuthorizedBasicHeader(abuf);
+        }
+        free(abuf);
+      }
+    }
+    if (!ok) {
+      httpd_resp_set_status(req, "401 Unauthorized");
+      httpd_resp_set_hdr(req, "WWW-Authenticate", "Basic realm=\"ESP32Cam\"");
+      httpd_resp_set_type(req, "text/plain");
+      httpd_resp_send(req, "Unauthorized", HTTPD_RESP_USE_STRLEN);
+      return ESP_OK;
+    }
+  }
+
+  // Tell the client to expect multipart MJPEG stream + friendly headers
+  httpd_resp_set_hdr(req, "Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+  httpd_resp_set_hdr(req, "Pragma", "no-cache");
+  httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+  res = httpd_resp_set_type(req, _STREAM_CONTENT_TYPE);
+  if (res != ESP_OK) return res;
+
+  while (true) {
+    // Grab a frame from the camera
+    fb = esp_camera_fb_get();
+    if (!fb) {
+      res = ESP_FAIL;
+      break;
+    }
+
+    // Prepare JPEG buffer
+    const uint8_t* buf = nullptr;
+    size_t len = 0;
+    uint8_t* jpg_buf = nullptr;
+    size_t jpg_len = 0;
+
+    if (fb->format == PIXFORMAT_JPEG) {
+      buf = fb->buf;
+      len = fb->len;
+    } else {
+      // Convert frame buffer to JPEG if not already
+      bool ok = frame2jpg(fb, 80, &jpg_buf, &jpg_len);
+      if (!ok) {
+        esp_camera_fb_return(fb);
+        res = ESP_FAIL;
+        break;
+      }
+      buf = jpg_buf;
+      len = jpg_len;
+    }
+
+    // Send the JPEG as a multipart HTTP response:
+    // first the part header, then the image data, then the boundary marker
+    size_t hlen = snprintf(part_buf, sizeof(part_buf), _STREAM_PART, (unsigned)len);
+    res = httpd_resp_send_chunk(req, part_buf, hlen);
+    if (res == ESP_OK)
+      res = httpd_resp_send_chunk(req, (const char*)buf, len);
+    if (res == ESP_OK)
+      res = httpd_resp_send_chunk(req, _STREAM_BOUNDARY, strlen(_STREAM_BOUNDARY));
+
+    // Return/free buffers
+    if (fb) {
+      esp_camera_fb_return(fb);
+      fb = NULL;
+    }
+    if (jpg_buf) {
+      free(jpg_buf);
+      jpg_buf = NULL;
+    }
+
+    if (res != ESP_OK) break;
+  }
+
+  return res;
+}
+
+// Snapshot endpoint for quick diagnostics
+static esp_err_t snapshot_handler(httpd_req_t *req) {
+  if (isAuthEnabled()) {
+    bool ok = false;
+    int ql = httpd_req_get_url_query_len(req);
+    if (ql > 0) {
+      char* q = (char*)malloc(ql+1);
+      if (!q) return ESP_ERR_NO_MEM;
+      if (httpd_req_get_url_query_str(req, q, ql+1) == ESP_OK) {
+        char tbuf[128];
+        if (httpd_query_key_value(q, "token", tbuf, sizeof(tbuf)) == ESP_OK) {
+          ok = isValidTokenParam(tbuf);
+        }
+      }
+      free(q);
+    }
+    if (!ok) {
+      size_t alen = httpd_req_get_hdr_value_len(req, "Authorization");
+      if (alen > 0) {
+        char* abuf = (char*)malloc(alen+1);
+        if (!abuf) return ESP_ERR_NO_MEM;
+        if (httpd_req_get_hdr_value_str(req, "Authorization", abuf, alen+1) == ESP_OK) {
+          ok = isAuthorizedBasicHeader(abuf);
+        }
+        free(abuf);
+      }
+    }
+    if (!ok) {
+      httpd_resp_set_status(req, "401 Unauthorized");
+      httpd_resp_set_hdr(req, "WWW-Authenticate", "Basic realm=\"ESP32Cam\"");
+      httpd_resp_set_type(req, "text/plain");
+      httpd_resp_send(req, "Unauthorized", HTTPD_RESP_USE_STRLEN);
+      return ESP_OK;
+    }
+  }
+  camera_fb_t* fb = esp_camera_fb_get();
+  if (!fb) {
+    httpd_resp_set_status(req, "503 Service Unavailable");
+    httpd_resp_set_type(req, "text/plain");
+    httpd_resp_send(req, "Camera unavailable", HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+  }
+  const uint8_t* img = nullptr; size_t len = 0; uint8_t* jpg_buf = nullptr; size_t jpg_len = 0;
+  if (fb->format == PIXFORMAT_JPEG) { img = fb->buf; len = fb->len; }
+  else {
+    if (!frame2jpg(fb, 80, &jpg_buf, &jpg_len)) { esp_camera_fb_return(fb); return ESP_FAIL; }
+    img = jpg_buf; len = jpg_len;
+  }
+  httpd_resp_set_type(req, "image/jpeg");
+  httpd_resp_send(req, (const char*)img, len);
+  if (jpg_buf) free(jpg_buf);
+  esp_camera_fb_return(fb);
+  return ESP_OK;
+}
+
+/**
+ * Start HTTP server dedicated to MJPEG streaming.
+ * Uses port 81 and registers stream_handler for the "/stream" URI.
+ */
+void startStreamServer() {
+  httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+  config.server_port = 81; // Use a port different from the main web server
+
+  httpd_uri_t stream_uri = {
+    .uri       = "/stream",
+    .method    = HTTP_GET,
+    .handler   = stream_handler,
+    .user_ctx  = NULL
+  };
+
+  if (httpd_start(&stream_httpd, &config) == ESP_OK) {
+    // Register handler that serves the stream when /stream is requested
+    httpd_register_uri_handler(stream_httpd, &stream_uri);
+    // Also provide /snap for quick diagnostics
+    httpd_uri_t snap_uri = { .uri = "/snap", .method = HTTP_GET, .handler = snapshot_handler, .user_ctx = NULL };
+    httpd_register_uri_handler(stream_httpd, &snap_uri);
+  }
+}
+## `StreamServer.h`
+**Absolute path**: C:\Users\stellaris\Documents\PlatformIO\Projects\ESP32_CAM_AI\src\StreamServer.h
+**Size**: 41 bytes
+**Modified**: 2025-08-09 00:53:38 +0100
+**SHA256**: fff3c163400dd12f9a360984776df7675f26958cfaf5dd7be0a7f7f1363d2afd
+``````c#pragma once
+void startStreamServer();
+## `Utils.cpp`
+**Absolute path**: C:\Users\stellaris\Documents\PlatformIO\Projects\ESP32_CAM_AI\src\Utils.cpp
+**Size**: 813 bytes
+**Modified**: 2025-10-23 23:08:14 +0100
+**SHA256**: 65f873eae658ea636f6678cc962144109e40e36154c38e692c23c1e7580bebb0
+``````cpp#include "Utils.h"
+#include "soc/soc.h"
+#include "soc/rtc_cntl_reg.h"
+
+// Define servo globals here to ensure they are constructed
+// before any call to setupServos() from other translation units.
+Servo servo1;
+Servo servo2;
+
+void disableBrownout() {
+  // The ESP32-CAM is sensitive to brief voltage drops when peripherals
+  // such as the camera or servos draw peak current. Those dips can
+  // trigger the on-chip brownout detector and cause an unexpected
+  // reset, so the detector is disabled to keep the device running.
+  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
+}
+
+void setupServos() {
+  // Standard hobby servos expect a 20ms refresh period (50 Hz). Using
+  // this rate provides full range of motion and avoids jitter.
+  servo1.setPeriodHertz(50);
+  servo2.setPeriodHertz(50);
+}
+## `Utils.h`
+**Absolute path**: C:\Users\stellaris\Documents\PlatformIO\Projects\ESP32_CAM_AI\src\Utils.h
+**Size**: 558 bytes
+**Modified**: 2025-10-23 23:06:30 +0100
+**SHA256**: b4750c8af9a905afbfa58f6d4bfe91ae1b806260624b1f086df793ab8e0724f3
+``````c#ifndef UTILS_H
+#define UTILS_H
+
+#include <ESP32Servo.h>
+
+/**
+ * Globals for servo control. Defined in Utils.cpp to guarantee
+ * construction order before any call to setupServos().
+ */
+extern Servo servo1;
+extern Servo servo2;
+
+/**
+ * Disable the ESP32's brownout detector to prevent unwanted resets
+ * during brief voltage dips caused by high current draw.
+ */
+void disableBrownout();
+
+/**
+ * Configure the servos to run at a 50 Hz PWM frequency, the standard
+ * refresh rate for most hobby servos.
+ */
+void setupServos();
+
+#endif
+## `WiFiManager.cpp`
+**Absolute path**: C:\Users\stellaris\Documents\PlatformIO\Projects\ESP32_CAM_AI\src\WiFiManager.cpp
+**Size**: 30662 bytes
+**Modified**: 2025-10-23 23:09:39 +0100
+**SHA256**: faa94292f893c2507819f0e9fc29604751b038719bfa5bba29d5a6793b4948e6
+``````cpp#include "WiFiManager.h"
 #include <WiFi.h>
 #include <Preferences.h>
 #include <ESPAsyncWebServer.h>
@@ -748,3 +1499,37 @@ static void registerAuthRoutes() {
 
   g_authRoutesAdded = true;
 }
+## `WiFiManager.h`
+**Absolute path**: C:\Users\stellaris\Documents\PlatformIO\Projects\ESP32_CAM_AI\src\WiFiManager.h
+**Size**: 943 bytes
+**Modified**: 2025-10-23 23:09:45 +0100
+**SHA256**: 5c8386f501664c2d63ec045e8db8d882b6b571295b963e61d71a3f2ec46e22b1
+``````c// WiFiManager.h
+#ifndef WIFI_MANAGER_H
+#define WIFI_MANAGER_H
+
+#pragma once
+#include <Arduino.h> // for String
+
+// Forward declarations to avoid pulling in ESPAsyncWebServer everywhere
+class AsyncWebServer;
+class AsyncWebServerRequest;
+
+// Expose the shared web server for other modules (e.g., CameraServer.cpp)
+AsyncWebServer& getWebServer();
+
+// Ensure the web server is started exactly once
+void ensureWebServerStarted();
+
+// Existing functions you already had
+bool connectToStoredWiFi();
+void startConfigPortal();
+
+// Authentication helpers (Basic Auth + token)
+bool isAuthEnabled();
+bool isAuthorized(AsyncWebServerRequest* req);        // For AsyncWebServer (port 80)
+bool isAuthorizedBasicHeader(const char* header);     // For esp_http_server (port 81)
+bool isValidTokenParam(const char* token);            // For either server
+// Expose saved Base64 token (user:pass) for building intra-page links
+String getAuthTokenParam();
+#endif

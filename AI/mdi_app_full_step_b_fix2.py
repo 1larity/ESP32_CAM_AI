@@ -466,123 +466,143 @@ class CameraStreamThread(QtCore.QThread):
                 pass
             self._resp = None
 
-# --- Pan/Zoom viewer for a single camera window (self-contained) ---
-class _VideoView(QtWidgets.QLabel):
+
+
+class CameraCanvas(QtWidgets.QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setMinimumSize(320, 240)
-        self.setStyleSheet('background:#000; color:#9cf;')
-        self.setAlignment(QtCore.Qt.AlignCenter)
-        self._img = None            # QtGui.QImage
-        self._fit = True            # fit-to-window mode
-        self._scale = 1.0           # zoom factor when not fitting
-        self._pan = QtCore.QPointF(0.0, 0.0)
-        self._dragging = False
-        self._last_pos = QtCore.QPoint()
+        self.setMouseTracking(True)
+        self.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+        self.setAutoFillBackground(False)
+        self._pix = None
+        self._zoom = 1.0
+        self._pan = QtCore.QPointF(0, 0)
+        self._fit_mode = True
+        self._last_target_rect = QtCore.QRect()
 
-    # Public API
+    def has_frame(self) -> bool:
+        return self._pix is not None and not self._pix.isNull()
+
+    def image_size(self):
+        if self._pix is None or self._pix.isNull():
+            return (0, 0)
+        return (self._pix.width(), self._pix.height())
+
+    def drawn_size(self):
+        if self._fit_mode:
+            r = self._fit_target_rect()
+            return (r.width(), r.height())
+        # approximate drawn size under zoom (original size * zoom)
+        if self._pix is None or self._pix.isNull():
+            return (0, 0)
+        return (int(self._pix.width()*self._zoom), int(self._pix.height()*self._zoom))
+
     def set_frame(self, qimage: QtGui.QImage):
-        self._img = qimage
-        if self._fit:
-            # Reset pan when fitting to keep centered
-            self._pan = QtCore.QPointF(0.0, 0.0)
+        if qimage is None or qimage.isNull():
+            return
+        self._pix = QtGui.QPixmap.fromImage(qimage)
+        if self._fit_mode:
+            self._fit_to_window()
         self.update()
 
-    def set_fit(self):
-        self._fit = True
+    def set_fit(self, fit: bool):
+        self._fit_mode = bool(fit)
+        if fit:
+            self._fit_to_window()
         self.update()
 
-    def set_one_to_one(self):
-        self._fit = False
-        self._scale = 1.0
-        self._pan = QtCore.QPointF(0.0, 0.0)
+    def set_zoom_100(self):
+        self._fit_mode = False
+        self._zoom = 1.0
+        self._pan = QtCore.QPointF(0, 0)
         self.update()
 
-    # Input handling
-    def wheelEvent(self, ev: QtGui.QWheelEvent):
-        if self._img is None:
+    def zoom_delta(self, factor: float, anchor: QtCore.QPointF=None):
+        if self._pix is None or self._pix.isNull():
             return
-        # Only zoom if Ctrl is held
-        if not (ev.modifiers() & QtCore.Qt.KeyboardModifier.ControlModifier):
-            return
-        angle = ev.angleDelta().y() / 120.0
-        if angle == 0:
-            return
-        # Zoom about cursor position
-        self._fit = False
-        old_scale = self._scale
-        factor = 1.15 ** angle
-        self._scale = float(max(0.1, min(8.0, self._scale * factor)))
-
-        # Adjust pan to keep cursor point stable
-        if old_scale != 0 and self._img is not None:
-            p = ev.position()
-            view_w, view_h = self.width(), self.height()
-            img_w, img_h = self._img.width(), self._img.height()
-            # map view point to image coords under old transform
-            vx = (p.x() - view_w * 0.5) - self._pan.x()
-            vy = (p.y() - view_h * 0.5) - self._pan.y()
-            ix = vx / old_scale + img_w * 0.5
-            iy = vy / old_scale + img_h * 0.5
-            # recompute pan so same image point stays under cursor
-            nx = (ix - img_w * 0.5) * self._scale
-            ny = (iy - img_h * 0.5) * self._scale
-            self._pan = QtCore.QPointF((p.x() - view_w * 0.5) - nx,
-                                       (p.y() - view_h * 0.5) - ny)
+        self._fit_mode = False
+        old_zoom = self._zoom
+        self._zoom = max(0.10, min(4.0, self._zoom * float(factor)))
+        if anchor is not None and old_zoom != 0:
+            delta_zoom = self._zoom / old_zoom
+            self._pan = anchor - (anchor - self._pan) * delta_zoom
         self.update()
 
-    def mousePressEvent(self, ev: QtGui.QMouseEvent):
-        if ev.button() == QtCore.Qt.MouseButton.RightButton:
-            self._dragging = True
-            self._last_pos = ev.pos()
-            ev.accept()
-        else:
-            super().mousePressEvent(ev)
+    def resizeEvent(self, e):
+        if self._fit_mode:
+            self._fit_to_window()
+        super().resizeEvent(e)
 
-    def mouseMoveEvent(self, ev: QtGui.QMouseEvent):
-        if self._dragging and not self._fit:
-            delta = ev.pos() - self._last_pos
-            self._last_pos = ev.pos()
-            self._pan += QtCore.QPointF(delta.x(), delta.y())
-            self.update()
-            ev.accept()
-        else:
-            super().mouseMoveEvent(ev)
-
-    def mouseReleaseEvent(self, ev: QtGui.QMouseEvent):
-        if ev.button() == QtCore.Qt.MouseButton.RightButton:
-            self._dragging = False
-            ev.accept()
-        else:
-            super().mouseReleaseEvent(ev)
-
-    # Painting
-    def paintEvent(self, ev: QtGui.QPaintEvent):
-        super().paintEvent(ev)
-        if self._img is None or self._img.isNull():
-            return
+    def paintEvent(self, e):
         p = QtGui.QPainter(self)
-        p.setRenderHints(QtGui.QPainter.Antialiasing | QtGui.QPainter.SmoothPixmapTransform, True)
-
-        view_w, view_h = self.width(), self.height()
-        img_w, img_h = self._img.width(), self._img.height()
-
-        if self._fit:
-            # scale to fit while preserving aspect ratio, centered
-            scale = min(view_w / img_w, view_h / img_h)
-            sw, sh = img_w * scale, img_h * scale
-            x = (view_w - sw) * 0.5
-            y = (view_h - sh) * 0.5
-            target = QtCore.QRectF(x, y, sw, sh)
-            p.drawImage(target, self._img)
+        p.setClipRect(self.rect())
+        p.fillRect(self.rect(), QtCore.Qt.black)
+        if self._pix is None or self._pix.isNull():
+            return
+        p.setRenderHint(QtGui.QPainter.SmoothPixmapTransform, True)
+        if self._fit_mode:
+            target = self._fit_target_rect()
+            self._last_target_rect = target
+            p.drawPixmap(target, self._pix)
         else:
-            # 100% or arbitrary zoom with pan, centered origin then offset
-            cx = view_w * 0.5 + self._pan.x()
-            cy = view_h * 0.5 + self._pan.y()
-            sw, sh = img_w * self._scale, img_h * self._scale
-            target = QtCore.QRectF(cx - sw * 0.5, cy - sh * 0.5, sw, sh)
-            p.drawImage(target, self._img)
-        p.end()
+            w = self._pix.width()
+            h = self._pix.height()
+            t = QtGui.QTransform()
+            t.translate(self._pan.x(), self._pan.y())
+            t.scale(self._zoom, self._zoom)
+            cx = (self.width() - w) * 0.5
+            cy = (self.height() - h) * 0.5
+            t.translate(cx, cy)
+            p.setTransform(t)
+            p.drawPixmap(0, 0, self._pix)
+
+    def wheelEvent(self, e: QtGui.QWheelEvent):
+        ctrl = bool(e.modifiers() & QtCore.Qt.ControlModifier)
+        if ctrl:
+            anchor = QtCore.QPointF(e.position())
+            angle = e.angleDelta().y()
+            factor = 1.0 + (0.0015 * angle)
+            self.zoom_delta(factor, anchor)
+            e.accept()
+        else:
+            super().wheelEvent(e)
+
+    def mousePressEvent(self, e):
+        if e.button() in (QtCore.Qt.LeftButton, QtCore.Qt.MiddleButton):
+            if not self._fit_mode:
+                self._dragging = True
+                self._drag_start = e.position()
+        super().mousePressEvent(e)
+
+    def mouseMoveEvent(self, e):
+        if getattr(self, "_dragging", False) and getattr(self, "_drag_start", None) is not None:
+            delta = e.position() - self._drag_start
+            self._pan += QtCore.QPointF(delta.x(), delta.y())
+            self._drag_start = e.position()
+            self.update()
+        super().mouseMoveEvent(e)
+
+    def mouseReleaseEvent(self, e):
+        self._dragging = False
+        self._drag_start = None
+        super().mouseReleaseEvent(e)
+
+    def _fit_target_rect(self) -> QtCore.QRect:
+        if self._pix is None or self._pix.isNull():
+            return QtCore.QRect()
+        pw, ph = self._pix.width(), self._pix.height()
+        rw, rh = self.width(), self.height()
+        if not pw or not ph or not rw or not rh:
+            return QtCore.QRect()
+        s = min(rw / pw, rh / ph)
+        tw, th = int(pw * s), int(ph * s)
+        x = (rw - tw) // 2
+        y = (rh - th) // 2
+        return QtCore.QRect(x, y, tw, th)
+
+    def _fit_to_window(self):
+        self._pan = QtCore.QPointF(0, 0)
+        self._zoom = 1.0
 
 class CameraWidget(QtWidgets.QWidget):
     closed = QtCore.Signal(dict)
@@ -591,11 +611,25 @@ class CameraWidget(QtWidgets.QWidget):
         super().__init__(parent)
         self.cfg = cfg
         self.setWindowTitle(f"{cfg.name} [{cfg.host}]")
-        #self.label = QtWidgets.QLabel('Connecting…')
-        #self.label.setAlignment(QtCore.Qt.AlignCenter)
-        #self.label.setMinimumSize(320, 240)
-        #self.label.setStyleSheet('background:#000; color:#9cf;')
-        self.view = _VideoView(self)
+        self.canvas = CameraCanvas(self)
+        # overlay
+        self._overlay = QtWidgets.QWidget(self)
+        self._overlay.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
+        ovl_layout = QtWidgets.QVBoxLayout(self._overlay)
+        ovl_layout.setContentsMargins(0,0,0,0)
+        ovl_layout.setAlignment(QtCore.Qt.AlignCenter)
+        self._overlay_label = QtWidgets.QLabel('Connecting…')
+        self._overlay_label.setStyleSheet('color:white; background:rgba(0,0,0,180); padding:6px 10px; border-radius:6px;')
+        ovl_layout.addWidget(self._overlay_label, 0, QtCore.Qt.AlignCenter)
+        # stacked video area
+        self._stack = QtWidgets.QStackedLayout()
+        self._stack.setContentsMargins(0,0,0,0)
+        self._stack.addWidget(self.canvas)      # 0
+        self._stack.addWidget(self._overlay)    # 1
+        self._stack.setCurrentIndex(1)
+        # alignment handled by canvas + overlay
+        self.canvas.setMinimumSize(320, 240)
+        # canvas draws background
 
         # Recording state
         self.recording = False
@@ -612,42 +646,54 @@ class CameraWidget(QtWidgets.QWidget):
         self.event_buffer: list[str] = []  # last N events for sidebar
         # Presence tracking with hysteresis
         self.presence = {}  # id -> {present:bool, enter:float, last:float, missing_since:float|None}
-        self.grace_sec = 5  # require this absence before logging exit
+        self.grace_sec = 1.0  # require this absence before logging exit
 
         # Controls (local toolbar)
-        btns = QtWidgets.QToolBar()
-        btns.setMovable(False)
-        act_start = btns.addAction('Start')
-        act_stop = btns.addAction('Stop')
-        btns.addSeparator()
-        act_rec = btns.addAction('Start Rec')
-        act_stoprec = btns.addAction('Stop Rec')
-        btns.addSeparator()
-        act_fit = btns.addAction('Fit')
-        act_100 = btns.addAction('100%')
-        act_fit.triggered.connect(self._on_fit)
-        act_100.triggered.connect(self._on_one_to_one)
-        # Resize MDI sub-window to match current image size at 100%
-        act_fitwin = btns.addAction('FitWin')
-        act_fitwin.triggered.connect(self._on_fit_window_to_image)
+        self.tb = QtWidgets.QToolBar()
+        self.tb.setMovable(False)
+        self.tb.setFloatable(False)
+        self.tb.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Fixed)
+        act_start = self.tb.addAction('Start')
+        act_stop = self.tb.addAction('Stop')
+        self.tb.addSeparator()
+        act_rec = self.tb.addAction('Start Rec')
+        act_stoprec = self.tb.addAction('Stop Rec')
 
         act_start.triggered.connect(self.start_stream)
         act_stop.triggered.connect(self.stop_stream)
         act_rec.triggered.connect(self.start_recording)
         act_stoprec.triggered.connect(self.stop_recording)
 
+        # Zoom controls
+        self.tb.addSeparator()
+        act_fit = self.tb.addAction('Fit')
+        act_100 = self.tb.addAction('100%')
+        act_zoom_in = self.tb.addAction('+')
+        act_zoom_out = self.tb.addAction('−')
+        act_fit.triggered.connect(lambda: self.canvas.set_fit(True))
+        act_100.triggered.connect(self.canvas.set_zoom_100)
+        act_zoom_in.triggered.connect(lambda: self.canvas.zoom_delta(1.2, QtCore.QPointF(self.canvas.width()/2, self.canvas.height()/2)))
+        act_zoom_out.triggered.connect(lambda: self.canvas.zoom_delta(1/1.2, QtCore.QPointF(self.canvas.width()/2, self.canvas.height()/2)))
+    
+
         # Toolbar toggles
         # AI toggles moved into a dropdown menu button
-        self.chk_yolo = QtWidgets.QCheckBox('YOLO', self); self.chk_yolo.setChecked(True)
-        self.chk_face = QtWidgets.QCheckBox('Face', self); self.chk_face.setChecked(True)
-        self.chk_dogid = QtWidgets.QCheckBox('DogID', self); self.chk_dogid.setChecked(False)
-        ai_btn = QtWidgets.QToolButton(self)
+        self.chk_yolo = QtWidgets.QCheckBox('YOLO'); self.chk_yolo.setChecked(True)
+        self.chk_face = QtWidgets.QCheckBox('Face'); self.chk_face.setChecked(True)
+        self.chk_yolo.setVisible(False); self.chk_face.setVisible(False)
+        self.tb.addSeparator()
+        ai_btn = QtWidgets.QToolButton()
         ai_btn.setText('AI')
         ai_btn.setPopupMode(QtWidgets.QToolButton.InstantPopup)
         ai_menu = QtWidgets.QMenu(ai_btn)
-        act_ai_yolo = ai_menu.addAction('YOLO'); act_ai_yolo.setCheckable(True); act_ai_yolo.setChecked(self.chk_yolo.isChecked())
-        act_ai_face = ai_menu.addAction('Face'); act_ai_face.setCheckable(True); act_ai_face.setChecked(self.chk_face.isChecked())
-        act_ai_dogid = ai_menu.addAction('DogID'); act_ai_dogid.setCheckable(True); act_ai_dogid.setChecked(self.chk_dogid.isChecked())
+        act_ai_yolo = ai_menu.addAction('YOLO')
+        act_ai_yolo.setCheckable(True); act_ai_yolo.setChecked(self.chk_yolo.isChecked())
+        act_ai_face = ai_menu.addAction('Face')
+        act_ai_face.setCheckable(True); act_ai_face.setChecked(self.chk_face.isChecked())
+        # Optional dog identity recognition
+        self.chk_dogid = QtWidgets.QCheckBox('Dog ID'); self.chk_dogid.setChecked(True)
+        act_ai_dogid = ai_menu.addAction('Dog ID')
+        act_ai_dogid.setCheckable(True); act_ai_dogid.setChecked(self.chk_dogid.isChecked())
         def _sync_ai():
             act_ai_yolo.setChecked(self.chk_yolo.isChecked())
             act_ai_face.setChecked(self.chk_face.isChecked())
@@ -666,9 +712,13 @@ class CameraWidget(QtWidgets.QWidget):
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(4,4,4,4)
-        layout.addWidget(btns)
-        layout.addWidget(self.view, 1)
-        # intentionally not adding lbl_status to the layout (no in-window collection status)
+        layout.setSpacing(0)
+        layout.addWidget(self.tb)
+        video_host = QtWidgets.QWidget(self)
+        video_host.setLayout(self._stack)
+        video_host.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+        layout.addWidget(video_host, 1)
+        # optional per-camera status label can be added here if desired
 
         # Stream thread
         self.thr = CameraStreamThread(cfg)
@@ -677,55 +727,35 @@ class CameraWidget(QtWidgets.QWidget):
         # AI components per camera
         self.yolo = YOLODetector()
         self.facedb = FaceDB(); self.facedb.load()
+        self.pets = PetsDB(); self.pets.load()
+        self.last_face_bbox=None; self.last_pet_bbox=None
+        self.collect_face=None  # {'name':str,'n':int,'col':int,'last':float}
+        self.collect_pet=None   # {'name':str,'sp':str,'n':int,'col':int,'last':float}
+        self.dogid_thresh = 0.18
+        self.collect_dlg = None # popup dialog for collection status
 
-        # pre-record buffer etc. (keep your existing init code below)
+        # Shared frame and results (thread-safe)
+        self._latest_frame = None
         self._frame_lock = threading.Lock()
-        self._latest_frame: Optional[np.ndarray] = None
-        self._prerecord_secs = 5
-        self._prerecord_buf: deque[tuple[float, np.ndarray]] = deque(maxlen=int(self.target_fps * self._prerecord_secs))
+        self._last_dets = []      # [(cls,conf,x,y,w,h)] in original coords
+        self._last_faces = []     # [(name,score,x,y,w,h)] in original coords
+        self._last_overlay_ts = 0
 
-    def _sync_ai(self):  # if referenced elsewhere
-        pass
+        # Simple tracker for object permanence + aiming
+        self.tracker = SimpleTracker(ttl=1.0)  # seconds before track expires
+        # Detection worker thread (decouples heavy CV from UI), interval overridable by settings
+        self.det_thr = DetectionThread(self)
+        self.det_thr.resultsReady.connect(self.on_results)
+        self.det_thr.start()
+        # PTZ aiming timer
+        self._aim_timer = QtCore.QTimer(self)
+        self._aim_timer.setInterval(300)
+        self._aim_timer.timeout.connect(self.aim_at_target)
+        self._aim_timer.start()
 
-    def _on_fit(self):
-        try:
-            self.view.set_fit()
-        except Exception:
-            pass
-
-    def _on_one_to_one(self):
-        try:
-            self.view.set_one_to_one()
-        except Exception:
-            pass
-
-    def _on_fit_window_to_image(self):
-        img = getattr(self.view, "_img", None)
-        if not isinstance(img, QtGui.QImage) or img.isNull():
-            return
-        # set 100% zoom and center
-        self.view.set_one_to_one()
-        img_w, img_h = img.width(), img.height()
-        lay = self.layout()
-        m = lay.contentsMargins() if lay else QtCore.QMargins(0, 0, 0, 0)
-        # approximate toolbar height
-        tb_h = 0
-        try:
-            tb_h = self.findChild(QtWidgets.QToolBar).sizeHint().height()
-        except Exception:
-            pass
-        desired_w = img_w + m.left() + m.right()
-        desired_h = img_h + tb_h + m.top() + m.bottom()
-        sub = self.window()
-        try:
-            style = sub.style()
-            frame_w = style.pixelMetric(QtWidgets.QStyle.PM_MdiSubWindowFrameWidth, None, sub)
-            title_h = style.pixelMetric(QtWidgets.QStyle.PM_TitleBarHeight, None, sub)
-            chrome_w = 2 * max(0, frame_w)
-            chrome_h = title_h + 2 * max(0, frame_w)
-            sub.resize(desired_w + chrome_w, desired_h + chrome_h)
-        except Exception:
-            self.resize(desired_w, desired_h)
+        # hidden inputs used by MainWindow to pass parameters
+        self.ed_name = QtWidgets.QLineEdit()
+        self.cmb_species = QtWidgets.QComboBox(); self.cmb_species.addItems(['dog','cat'])
 
     def start_stream(self):
         if not self.thr.isRunning():
@@ -735,112 +765,446 @@ class CameraWidget(QtWidgets.QWidget):
     def stop_stream(self):
         if self.thr.isRunning():
             self.thr.stop()
+            # Give the worker time to unwind network loop
             if not self.thr.wait(700):
                 try:
+                    # As a last resort on shutdown
                     self.thr.terminate()
                     self.thr.wait(200)
                 except Exception:
                     pass
 
-    def aim_at_target(self, ex: float, ey: float):
-        # existing PT control logic unchanged
-        pass
-
-    def apply_config(self, cfg: CameraConfig):
-        self.cfg = cfg
-        self.setWindowTitle(f"{cfg.name} [{cfg.host}]")
-        # other per-cam config updates if any
+    def apply_config(self, new_cfg: CameraConfig):
+        # Stop current stream thread and swap config
+        try:
+            self.stop_stream()
+        except Exception:
+            pass
+        self.cfg = new_cfg
+        self.setWindowTitle(new_cfg.name)
+        # Rebuild stream thread to ensure fresh session/auth
+        try:
+            if hasattr(self.thr, 'frameReady'):
+                try:
+                    self.thr.frameReady.disconnect(self.on_frame)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        try:
+            self.thr = CameraStreamThread(new_cfg)
+            self.thr.frameReady.connect(self.on_frame)
+        except Exception:
+            # If anything goes wrong, keep old thread but update its cfg
+            try:
+                self.thr.cfg = new_cfg
+            except Exception:
+                pass
+        # Clear prebuffer and frames
+        with self._frame_lock:
+            self._latest_frame = None
+        try:
+            self.thr._buf = bytearray()
+            if hasattr(self.thr, 'prebuffer') and hasattr(self.thr.prebuffer, 'clear'):
+                self.thr.prebuffer.clear()
+        except Exception:
+            pass
+        # Restart
+        try:
+            self.start_stream()
+        except Exception:
+            pass
 
     def start_recording(self):
         if self.recording:
             return
-        os.makedirs(self.out_dir, exist_ok=True)
-        fname = datetime.now().strftime("%Y%m%d_%H%M%S") + f"_{self.cfg.name}.mp4"
-        path = os.path.join(self.out_dir, fname)
+        # estimate FPS from prebuffer timing
+        fps = self.target_fps
+        if len(self.thr.prebuffer) >= 5:
+            tspan = self.thr.prebuffer[-1][1] - self.thr.prebuffer[0][1]
+            frames = len(self.thr.prebuffer)
+            if tspan > 0:
+                fps = max(5.0, min(30.0, frames / tspan))
+        # open writer
+        ts_str = time.strftime('%Y%m%d_%H%M%S')
+        # Prefer MJPG/AVI for broad codec compatibility on Windows
+        outfile = os.path.join(self.out_dir, f"{self.cfg.name}_{self.cfg.host}_{ts_str}.avi")
         h, w = self.current_size()
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        self.writer = cv2.VideoWriter(path, fourcc, self.target_fps, (w, h))
-        if not self.writer.isOpened():
+        # Ensure even dimensions for encoders like H.264/MP4
+        if w % 2 == 1: w -= 1
+        if h % 2 == 1: h -= 1
+        fourcc = cv2.VideoWriter_fourcc(*'MJPG')
+        self.writer = cv2.VideoWriter(outfile, fourcc, fps, (w, h))
+        if not self.writer or not self.writer.isOpened():
+            # Fallback to MP4V
+            outfile = os.path.join(self.out_dir, f"{self.cfg.name}_{self.cfg.host}_{ts_str}.mp4")
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            self.writer = cv2.VideoWriter(outfile, fourcc, fps, (w, h))
+        if not self.writer or not self.writer.isOpened():
+            QtWidgets.QMessageBox.warning(self, 'Record', 'Failed to open video writer')
             self.writer = None
             return
-        # dump prerecord buffer
-        for _, fr in list(self._prerecord_buf):
-            self.writer.write(fr)
+        # dump prebuffer first
+        for frm, _ in list(self.thr.prebuffer):
+            if frm.shape[1] != w or frm.shape[0] != h:
+                frm = cv2.resize(frm, (w, h))
+            self.writer.write(frm)
         self.recording = True
+        self._update_titles(recording=True)
 
     def stop_recording(self):
-        if not self.recording:
-            return
-        try:
-            self.writer.release()
-        except Exception:
-            pass
-        self.writer = None
+        if self.recording and self.writer is not None:
+            try:
+                self.writer.release()
+            except Exception:
+                pass
         self.recording = False
+        self.writer = None
+        self._update_titles(recording=False)
 
-    def current_size(self) -> Tuple[int, int]:
-        with self._frame_lock:
-            if self._latest_frame is not None:
-                h, w = self._latest_frame.shape[:2]
-                return h, w
-        img = getattr(self.view, "_img", None)
-        if isinstance(img, QtGui.QImage) and not img.isNull():
-            return img.height(), img.width()
+    def current_size(self) -> Tuple[int,int]:
+        iw, ih = self.canvas.image_size()
+        if iw and ih:
+            return ih, iw
         return 480, 640
 
-    def on_frame(self, frame_bgr: np.ndarray):
-        ts = time.time()
+    @QtCore.Slot(np.ndarray, float)
+    def on_frame(self, bgr: np.ndarray, ts: float):
+        # Save latest frame for worker
         with self._frame_lock:
-            self._latest_frame = frame_bgr
-        # prerecord circular buffer
-        self._prerecord_buf.append((ts, frame_bgr.copy()))
-        # convert for display
-        h, w = frame_bgr.shape[:2]
-        rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-        img = QtGui.QImage(rgb.data, w, h, rgb.strides[0], QtGui.QImage.Format.Format_RGB888).copy()
-        self.view.set_frame(img)
-        # write if recording
-        if self.recording and self.writer:
-            self.writer.write(frame_bgr)
+            self._latest_frame = bgr.copy()
 
+        # Keep a clean copy before any overlays for saving samples
+        raw_bgr = bgr.copy()
 
-def aim_at_target(self):
-    # Called by timer every 300 ms
-    if not self.chk_yolo.isChecked():
-        return
-    dets = self._last_dets
-    if not dets:
-        return
-    # Pick highest conf person/dog/cat
-    pri = {'person':3, 'dog':2, 'cat':1}
-    dets_sorted = sorted([d for d in dets if d[0] in pri], key=lambda x:(pri[x[0]], x[1]), reverse=True)
-    if not dets_sorted:
-        return
-    _, conf, x, y, w, h = dets_sorted[0]
-    if conf < 0.35:
-        return
-    # Compute error from frame center
-    H, W = self.current_size()
-    cx = x + w/2.0; cy = y + h/2.0
-    ex = (cx - W/2.0) / (W/2.0)   # -1..1
-    ey = (cy - H/2.0) / (H/2.0)
-    dead = 0.1
-    if abs(ex) < dead and abs(ey) < dead:
-        return
-    # Map to small steps
-    dx = int(max(-15, min(15, -ex * 20)))
-    dy = int(max(-15, min(15,  ey * 20)))  # invert Y: image down means tilt increases
-    try:
-        base = f"http://{self.cfg.host.split(':')[0]}"
-        url = f"{base}/ptz/step?dx={dx}&dy={dy}"
-        # Include token if needed
-        if self.cfg.token:
-            sep = '&' if '?' in url else '?'
-            url = f"{url}{sep}token={self.cfg.token}"
-        requests.get(url, timeout=0.4)
-    except Exception:
-        pass
+        # Draw last results as overlays
+        # (Rendering stale by <= detection interval, keeps UI responsive)
+        dets = self._last_dets
+        faces = self._last_faces
+        # Recognize dog identities if enabled
+        recognized_dogs = []  # list of (name, score, x,y,w,h)
+        if getattr(self, 'chk_dogid', None) and self.chk_dogid.isChecked():
+            try:
+                for (cls,conf,x,y,w,h) in dets:
+                    if cls == 'dog':
+                        roi = raw_bgr[max(0,y):y+h, max(0,x):x+w]
+                        if roi.size > 0:
+                            name, score = self.pets.recognize(roi, 'dog')
+                            if name and name != 'unknown' and float(score) >= self.dogid_thresh:
+                                recognized_dogs.append((name, float(score), x, y, w, h))
+            except Exception:
+                pass
 
+        for (cls,conf,x,y,w,h) in dets:
+            color = (255,0,0) if cls=='person' else (0,0,255) if cls=='dog' else (255,0,255) if cls=='cat' else (0,255,255)
+            cv2.rectangle(bgr,(x,y),(x+w,y+h),color,2)
+            label = f"{cls} {conf:.2f}"
+            if cls == 'dog' and recognized_dogs:
+                # find a matching recognized dog by IOU overlap
+                best=None; best_iou=0.0
+                for (nm,sc,dx,dy,dw,dh) in recognized_dogs:
+                    # compute simple IOU
+                    x1=max(x,dx); y1=max(y,dy); x2=min(x+w,dx+dw); y2=min(y+h,dy+dh)
+                    inter=max(0,x2-x1)*max(0,y2-y1); ua=w*h + dw*dh - inter
+                    iou = (inter/ua) if ua>0 else 0.0
+                    if iou>best_iou: best_iou=iou; best=(nm,sc)
+                if best and best_iou>=0.3:
+                    label = f"dog {best[0]} {best[1]:.2f}"
+            cv2.putText(bgr,label, (x,max(0,y-6)), cv2.FONT_HERSHEY_SIMPLEX,0.5,color,1,cv2.LINE_AA)
+            if cls in ('dog','cat'):
+                self.last_pet_bbox=(x,y,w,h,cls)
+        self.last_face_bbox=None
+        for (name,score,x,y,w,h) in faces:
+            color=(0,255,0) if name!='unknown' else (0,165,255)
+            cv2.rectangle(bgr,(x,y),(x+w,y+h),color,2)
+            cv2.putText(bgr,f"{name} {score:.2f}", (x,max(0,y-6)), cv2.FONT_HERSHEY_SIMPLEX,0.5,color,1,cv2.LINE_AA)
+            self.last_face_bbox=(x,y,w,h)
+
+        # handle collections
+        now=time.time()
+
+        # ---- Face collection progress & feedback ----
+        if self.collect_face:
+            name = self.collect_face['name']
+            if self.last_face_bbox and (now - self.collect_face['last'] >= 0.2):
+                x,y,w,h=self.last_face_bbox
+                gray=cv2.cvtColor(raw_bgr,cv2.COLOR_BGR2GRAY)
+                if self.facedb.enroll(gray,x,y,w,h,name):
+                    self.collect_face['col']+=1; self.collect_face['last']=now
+            # Update status every frame
+            col = self.collect_face['col']; n = self.collect_face['n']
+            if col >= n:
+                self.facedb.load(); self.collect_face=None
+                self._update_collect_dialog(f'Face collection done: {name} ({n}/{n})', done=True)
+            else:
+                suffix = '' if self.last_face_bbox else ' (waiting for face)'
+                self._update_collect_dialog(f'Collecting face: {name} {col}/{n}{suffix}')
+        # ---- Pet collection progress & feedback ----
+        if self.collect_pet:
+            species=self.collect_pet['sp']; name=self.collect_pet['name']
+            # choose largest of desired species among current detections
+            candidates=[(x,y,w,h) for (cls,conf,x,y,w,h) in dets if cls==species]
+            if now - self.collect_pet['last'] >= 0.15 and candidates:
+                bx=max(candidates,key=lambda b:b[2]*b[3])
+                x,y,w,h=bx
+                roi=raw_bgr[max(0,y):y+h, max(0,x):x+w]
+                if self.pets.enroll(roi,name,species):
+                    self.collect_pet['col']+=1; self.collect_pet['last']=now
+            # Update status every frame
+            col = self.collect_pet['col']; n = self.collect_pet['n']
+            if col >= n:
+                self.pets.load(); self.collect_pet=None
+                self._update_collect_dialog(f'Pet collection done: {species}:{name} ({n}/{n})', done=True)
+            else:
+                self._update_collect_dialog(f'Collecting {species}: {name} {col}/{n}' + ('' if candidates else ' (waiting)'))
+
+        # Update presence and events with dog identities if available
+        try:
+            dog_names = {nm for (nm,sc,x,y,w,h) in recognized_dogs}
+            self._update_presence(dets, faces, now, dog_names)
+        except Exception:
+            pass
+
+        # show (draw overlays after collection saving used raw_bgr)
+        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+        h, w, ch = rgb.shape
+        img = QtGui.QImage(rgb.data, w, h, int(rgb.strides[0]), QtGui.QImage.Format.Format_RGB888)
+        img = img.copy()
+        if self._stack.currentIndex() != 0:
+            self._stack.setCurrentIndex(0)
+        self.canvas.set_frame(img)
+        # write
+        if self.recording and self.writer is not None:
+            # ensure writer size consistency
+            W = int(self.writer.get(cv2.CAP_PROP_FRAME_WIDTH))
+            H = int(self.writer.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            # Fallback if writer reports invalid dimensions
+            if W <= 0 or H <= 0:
+                W, H = bgr.shape[1], bgr.shape[0]
+            # Ensure even dims
+            if W % 2 == 1: W -= 1
+            if H % 2 == 1: H -= 1
+            if bgr.shape[1] != W or bgr.shape[0] != H:
+                try:
+                    bgr = cv2.resize(bgr, (W, H))
+                except Exception:
+                    # As a last resort, skip resizing and write the original
+                    W, H = bgr.shape[1], bgr.shape[0]
+            try:
+                self.writer.write(bgr)
+            except Exception:
+                # If writing fails, stop recording gracefully
+                self.stop_recording()
+
+    def _update_titles(self, recording: bool | None = None):
+        rec = recording if recording is not None else self.recording
+        title = f"{self.cfg.name} [{self.cfg.host}]" + (" (REC)" if rec else "")
+        try:
+            self.setWindowTitle(title)
+        except Exception:
+            pass
+        try:
+            # Also update the QMdiSubWindow title if hosted
+            sw = self.window()
+            if isinstance(sw, QtWidgets.QMdiSubWindow):
+                sw.setWindowTitle(title)
+        except Exception:
+            pass
+
+    def shutdown(self):
+        # Stop timers first to prevent new actions
+        try:
+            if hasattr(self, '_aim_timer'):
+                self._aim_timer.stop()
+        except Exception:
+            pass
+        # Close collection dialog if open
+        try:
+            if getattr(self, 'collect_dlg', None):
+                self.collect_dlg.accept()
+                self.collect_dlg = None
+        except Exception:
+            pass
+        # Stop recording and threads
+        self.stop_recording()
+        self.stop_stream()
+        try:
+            if self.det_thr.isRunning():
+                self.det_thr.stop()
+                if not self.det_thr.wait(600):
+                    self.det_thr.terminate()
+                    self.det_thr.wait(200)
+        except Exception:
+            pass
+
+    def closeEvent(self, e: QtGui.QCloseEvent) -> None:
+        self.shutdown()
+        try:
+            self.closed.emit(self.cfg.__dict__)
+        except Exception:
+            pass
+        super().closeEvent(e)
+
+    # ----- collection UI helpers (popup dialog) -----
+    def _ensure_collect_dialog(self, title: str):
+        if self.collect_dlg is None:
+            self.collect_dlg = CollectionDialog(self, title)
+            self.collect_dlg.stopClicked.connect(self.stop_collection)
+            self.collect_dlg.show()
+
+    def _update_collect_dialog(self, text: str, done: bool = False):
+        if self.collect_dlg is None:
+            # if collection active but dialog missing, create it
+            if self.collect_face or self.collect_pet:
+                self._ensure_collect_dialog('Collection')
+        if self.collect_dlg is not None:
+            try:
+                self.collect_dlg.set_status(text)
+                if done:
+                    # auto-close after short delay
+                    QtCore.QTimer.singleShot(600, lambda: (self.collect_dlg and self.collect_dlg.accept(), setattr(self, 'collect_dlg', None)))
+            except Exception:
+                pass
+
+    # ----- actions
+    def do_enroll_face(self, name: str | None = None):
+        if not self.last_face_bbox:
+            self.lbl_status.setText('No face detected')
+            return
+        if name is None:
+            name=self.ed_name.text().strip() or 'person'
+        x,y,w,h=self.last_face_bbox
+        if not self.canvas.has_frame():
+            self.lbl_status.setText('No frame')
+            return
+        # Best-effort enroll from last frame already handled in on_frame
+        self.facedb.load(); self.lbl_status.setText(f'Enrolled face: {name}')
+
+    def do_collect_face(self, name: str | None = None, n: int = 20):
+        if name is None:
+            name=self.ed_name.text().strip() or 'person'
+        # Cancel any ongoing pet collection
+        self.collect_pet = None
+        self.collect_face={'name':name,'n':int(n or 20),'col':0,'last':0.0}
+        self._ensure_collect_dialog('Face Collection')
+        self._update_collect_dialog(f'Collecting face: {name} 0/{int(n or 20)}')
+
+    def do_enroll_pet(self, name: str | None = None, species: str | None = None):
+        sp= species or self.cmb_species.currentText()
+        name= (name or self.ed_name.text().strip()) or 'pet'
+        if self.last_pet_bbox:
+            x,y,w,h,cls=self.last_pet_bbox
+            if cls!=sp:
+                self.lbl_status.setText(f'Last bbox is {cls}')
+                return
+            # capture current displayed frame area
+            # For simplicity, rely on on_frame collection path for consistency
+            self.pets.load(); self.lbl_status.setText(f'Enrolled {sp}:{name}')
+        else:
+            self.lbl_status.setText('No pet detected')
+
+    def do_collect_pet(self, name: str | None = None, species: str | None = None, n: int = 40):
+        sp= species or self.cmb_species.currentText()
+        name= (name or self.ed_name.text().strip()) or 'pet'
+        # Cancel any ongoing face collection
+        self.collect_face = None
+        self.collect_pet={'name':name,'sp':sp,'n':int(n or 40),'col':0,'last':0.0}
+        self._ensure_collect_dialog('Pet Collection')
+        self._update_collect_dialog(f'Collecting {sp}: {name} 0/{int(n or 40)}')
+
+    def stop_collection(self):
+        had_face = self.collect_face is not None
+        had_pet  = self.collect_pet is not None
+        self.collect_face = None
+        self.collect_pet = None
+        if self.collect_dlg:
+            try:
+                self.collect_dlg.accept()
+            except Exception:
+                pass
+            self.collect_dlg = None
+
+    # ----- management helpers
+    def _select_and_delete_images(self, root_dir: str, title: str):
+        if not os.path.isdir(root_dir):
+            QtWidgets.QMessageBox.warning(self, 'Manage', f'Path not found:\n{root_dir}')
+            return
+        files, _ = QtWidgets.QFileDialog.getOpenFileNames(self, title, root_dir, 'Images (*.jpg *.jpeg *.png)')
+        if not files:
+            return
+        if QtWidgets.QMessageBox.question(self, 'Delete', f'Delete {len(files)} files?') != QtWidgets.QMessageBox.Yes:
+            return
+        cnt=0
+        for fp in files:
+            try:
+                os.remove(fp); cnt+=1
+            except Exception:
+                pass
+        QtWidgets.QMessageBox.information(self, 'Manage', f'Deleted {cnt} files')
+
+    def do_manage_faces(self):
+        name=self.ed_name.text().strip()
+        if not name:
+            name, ok = QtWidgets.QInputDialog.getText(self, 'Manage Faces', 'Name:')
+            if not ok or not name: return
+        path=os.path.join('ai','data','faces',name)
+        self._select_and_delete_images(path, f'Faces: {name}')
+        self.facedb.load()
+
+    def do_manage_pets(self):
+        name=self.ed_name.text().strip()
+        sp=self.cmb_species.currentText()
+        if not name:
+            name, ok = QtWidgets.QInputDialog.getText(self, 'Manage Pets', f'{sp} name:')
+            if not ok or not name: return
+        path=os.path.join('ai','data','pets','dogs' if sp=='dog' else 'cats', name)
+        self._select_and_delete_images(path, f'{sp.title()}: {name}')
+        self.pets.load()
+
+    @QtCore.Slot(list, list)
+    def on_results(self, dets, faces):
+        # Called from worker thread via Qt signal (thread-safe)
+        self._last_dets = dets
+        self._last_faces = faces
+        # Update tracker using detections
+        now = time.time()
+        self.tracker.update(dets, now)
+        # Presence update moved to on_frame where dog identity is available
+
+    def aim_at_target(self):
+        # Aim at cats only; use simple proportional step toward center
+        target = self.tracker.primary_target(prefer='cat')
+        if not target:
+            return
+        x,y,w,h,cls,last_ts = target
+        # compute from last displayed pixmap size
+        W = max(1, self.canvas.width()); H = max(1, self.canvas.height())
+        cx = x + w/2; cy = y + h/2
+        dx = cx - W/2; dy = cy - H/2
+        deadzone_px = max(8, int(0.05*min(W,H)))
+        base = f"http://{self.cfg.host}"
+        token = ("?token="+self.cfg.token) if self.cfg.token else ""
+        headers = {}
+        ah = self.cfg.auth_header()
+        if ah: headers['Authorization']=ah
+        req_auth = None
+        if not self.cfg.token and self.cfg.user and self.cfg.password:
+            try:
+                from requests.auth import HTTPBasicAuth
+                req_auth = HTTPBasicAuth(self.cfg.user, self.cfg.password)
+            except Exception:
+                req_auth = None
+        try:
+            if dx > deadzone_px:
+                requests.get(base+"/action?go=left"+token, headers=headers, auth=req_auth, timeout=0.5)
+            elif dx < -deadzone_px:
+                requests.get(base+"/action?go=right"+token, headers=headers, auth=req_auth, timeout=0.5)
+            if dy > deadzone_px:
+                requests.get(base+"/action?go=down"+token, headers=headers, auth=req_auth, timeout=0.5)
+            elif dy < -deadzone_px:
+                requests.get(base+"/action?go=up"+token, headers=headers, auth=req_auth, timeout=0.5)
+        except Exception:
+            pass
 
     # ----- presence + event logging -----
     def _log_event(self, text: str):
@@ -963,9 +1327,6 @@ class DetectionThread(QtCore.QThread):
                 # Avoid crashing the thread on sporadic errors
                 pass
             self.resultsReady.emit(dets, faces)
-
-
-
 
 
 class SimpleTracker:
