@@ -1,0 +1,19 @@
+{
+  "models_dir": "models",
+  "output_dir": "recordings",
+  "logs_dir": "logs",
+  "detect_interval_ms": 100,
+  "thresh_yolo": 0.35,
+  "prebuffer_ms": 3000,
+  "yolo_url": null,
+  "haar_url": null,
+  "cameras": [
+    {
+      "name": "cam1",
+      "stream_url": "http://192.168.1.130:81/stream",
+      "user": "sysadm",
+      "password": "Observa90",
+      "token": null
+    }
+  ]
+}

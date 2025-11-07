@@ -1,0 +1,14 @@
+{"ts": 367775999, "camera": "cam1", "event": "enter", "type": "cat"}
+{"ts": 367778520, "camera": "cam1", "event": "exit", "type": "cat"}
+{"ts": 368002342, "camera": "cam1", "event": "enter", "type": "person"}
+{"ts": 368021175, "camera": "cam1", "event": "exit", "type": "person"}
+{"ts": 368022056, "camera": "cam1", "event": "enter", "type": "person"}
+{"ts": 368060080, "camera": "cam1", "event": "exit", "type": "person"}
+{"ts": 368060798, "camera": "cam1", "event": "enter", "type": "person"}
+{"ts": 368065996, "camera": "cam1", "event": "exit", "type": "person"}
+{"ts": 368067317, "camera": "cam1", "event": "enter", "type": "person"}
+{"ts": 368070672, "camera": "cam1", "event": "exit", "type": "person"}
+{"ts": 368070830, "camera": "cam1", "event": "enter", "type": "person"}
+{"ts": 368232863, "camera": "cam1", "event": "enter", "type": "person"}
+{"ts": 368421880, "camera": "cam1", "event": "exit", "type": "person"}
+{"ts": 368422240, "camera": "cam1", "event": "enter", "type": "person"}
