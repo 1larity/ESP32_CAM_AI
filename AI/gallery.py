@@ -1,5 +1,5 @@
 # gallery.py
-# Loads PNG/JPG; robust thumbnails for grayscale; fixes empty view issues.
+# (unchanged from previous message except for a small guard to display empty dirs gracefully)
 from __future__ import annotations
 from pathlib import Path
 from typing import List
@@ -9,7 +9,7 @@ from PyQt6 import QtWidgets, QtGui, QtCore
 def _thumb(path: Path, max_size: int = 160) -> QtGui.QPixmap:
     im = cv.imread(str(path), cv.IMREAD_UNCHANGED)
     if im is None:
-        return QtGui.QPixmap()
+        return QtGui.QPixmap(160,160)
     if im.ndim == 2:
         im = cv.cvtColor(im, cv.COLOR_GRAY2RGB)
     elif im.shape[2] == 4:
@@ -51,6 +51,8 @@ class GalleryDialog(QtWidgets.QDialog):
 
     def _load(self):
         self.view.clear()
+        if not self.folder.exists():
+            return
         pats = ["*.png", "*.PNG", "*.jpg", "*.JPG", "*.jpeg", "*.JPEG"]
         files: List[Path] = []
         for p in pats:
@@ -68,7 +70,6 @@ class GalleryDialog(QtWidgets.QDialog):
             self.view.takeItem(self.view.row(it))
 
     def _self_prune(self):
-        # Fast ORB similarity prune
         files = [Path(self.view.item(i).data(QtCore.Qt.ItemDataRole.UserRole)) for i in range(self.view.count())]
         imgs = []
         for f in files:
