@@ -1,0 +1,21 @@
+#include <WiFi.h>
+
+void setup() {
+  Serial.begin(115200);
+  delay(2000);
+  Serial.println("Minimal AP test");
+
+  WiFi.persistent(false);
+  WiFi.disconnect(true, true);
+  delay(200);
+
+  Serial.println("Calling WiFi.mode(WIFI_AP)...");
+  WiFi.mode(WIFI_AP);  // <-- if this crashes, it's the core/board, not your app
+
+  Serial.println("Calling WiFi.softAP...");
+  WiFi.softAP("TestAP");
+  Serial.print("AP IP: ");
+  Serial.println(WiFi.softAPIP());
+}
+
+void loop() {}

@@ -6,28 +6,43 @@
 #include "Utils.h"
 #include "PTZ.h"  
 
+static bool g_inConfigPortal = false;
+static bool g_otaReady = false;
+
 void setup() {
+  setCpuFrequencyMhz(240);
+  psramInit();
   Serial.begin(115200);
+  delay(2000);
+  Serial.println("\nBooting ESP32_CAM_AI...");
   disableBrownout();
+  Serial.println("Brownout disabled");
 
-  // Removed early setupServos() call.
-  // Servos are initialised inside setupCamera() after camera init.
-  // setupServos();
-
-  // Start Wi-Fi; if it fails, launch configuration portal and skip rest
+  Serial.println("Connecting to stored WiFi...");
   if (!connectToStoredWiFi()) {
+    g_inConfigPortal = true;
+    Serial.println("No stored WiFi, starting config portal");
     startConfigPortal();
-    return;  // remain in portal mode until restart
+    Serial.println("Config portal started");
+    return;
   }
+  Serial.println("WiFi connected");
 
-  // Now that WiFi is confirmed working
-  setupCamera();          // Camera init includes startStreamServer() and setupServos()
-  ptzInit(); // Init PTZ and register its routes on the shared server
-  startCameraServer();    // Web UI (controls only)
+  Serial.println("Init camera...");
+  setupCamera();
+  Serial.println("Init PTZ...");
+  ptzInit();
+  Serial.println("Start camera server...");
+  startCameraServer();
 
-  setupOTA();             // OTA updater
+  Serial.println("Init OTA...");
+  setupOTA();
+  g_otaReady = true;
+  Serial.println("Setup complete");
 }
 
 void loop() {
-  handleOTA();             // optional depending on OTA lib
+  if (!g_inConfigPortal && g_otaReady) {
+      handleOTA();
+  }
 }

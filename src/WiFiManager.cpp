@@ -1,4 +1,3 @@
-#include "WiFiManager.h"
 #include <WiFi.h>
 #include <Preferences.h>
 #include <ESPAsyncWebServer.h>
@@ -235,6 +234,13 @@ static bool verifyUserPass(const String& u, const String& p) {
   return memcmp(h, g_authHash, 32) == 0;
 }
 
+bool isAuthEnabled() {
+  static bool loaded=false;
+  if (!loaded) { loadAuthHashed(); loaded=true; }
+  Preferences p; p.begin("auth", true); String legacy = p.getString("pwd", ""); p.end();
+  return g_authEnabled || legacy.length() > 0;
+}
+
 bool isValidTokenParam(const char* token) {
   if (!isAuthEnabled()) return true;
   if (!token) return false;
@@ -266,12 +272,7 @@ bool isAuthorizedBasicHeader(const char* header) {
   return verifyUserPass(u, p);
 }
 
-bool isAuthEnabled() {
-  static bool loaded=false;
-  if (!loaded) { loadAuthHashed(); loaded=true; }
-  Preferences p; p.begin("auth", true); String legacy = p.getString("pwd", ""); p.end();
-  return g_authEnabled || legacy.length() > 0;
-}
+
 
 String getAuthTokenParam() {
   // Ensure token is loaded if present
