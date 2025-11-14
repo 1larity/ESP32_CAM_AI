@@ -8,15 +8,11 @@
   "cameras": [
     {
       "name": "cam1",
-      "stream_url": "192.168.1.130"
+      "stream_url": "http://192.168.1.130:81/stream?token=c3lzYWRtOk9ic2VydmE5MA=="
     },
     {
       "name": "cam2",
-      "stream_url": "http://192.168.1.130:81/stream?token=c3lzYWRtOk9ic2VydmE5MA=="
-    },
-    {
-      "name": "cam3",
-      "stream_url": "http://192.168.1.130:81/stream?token=c3lzYWRtOk9ic2VydmE5MA=="
+      "stream_url": "http://192.168.1.132:81/stream?token=c3lzYWRtOk9ic2VydmE5MA=="
     }
   ]
 }

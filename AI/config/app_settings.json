@@ -14,6 +14,13 @@
       "user": "sysadm",
       "password": "Observa90",
       "token": null
+    },
+    {
+      "name": "Cam-2",
+      "stream_url": "http://192.168.1.132:81/stream",
+      "user": "sysadm",
+      "password": "Observa90",
+      "token": null
     }
   ]
 }

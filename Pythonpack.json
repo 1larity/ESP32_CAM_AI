@@ -1,0 +1,49 @@
+{
+    "profile_name": "Pythonpack",
+    "project_root": "F:/share/code/Python/GPTsynch",
+    "input_roots": [
+        "C:\\Users\\stellaris\\Documents\\PlatformIO\\Projects\\ESP32_CAM_AI\\AI"
+    ],
+    "include_children": true,
+    "packs_dir": "C:\\Users\\stellaris\\Documents\\PlatformIO\\Projects\\ESP32_CAM_AI",
+    "baselines_dir": "C:\\Users\\stellaris\\Documents\\PlatformIO\\Projects\\ESP32_CAM_AI",
+    "model_backend": "selenium",
+    "ignore_patterns": [
+        ".git/",
+        "__pycache__/",
+        ".md"
+    ],
+    "extensions": [
+        ".py"
+    ],
+    "auto_update": false,
+    "prompt_examples": [
+        "Refactor for readability and maintainability. Prefer pure functions, remove dead code, add type hints where beneficial, keep behavior identical.",
+        "Add comprehensive docstrings in Google style to public functions/classes. Include params, returns, raises, and short usage examples.",
+        "Write unit tests for key modules. Target ~90% coverage. List critical test cases and edge conditions before writing tests.",
+        "Performance pass: Identify hotspots and suggest optimizations. Consider asymptotic complexity, I/O, memory, and Python-specific micro-opts.",
+        "Security review: Check for injection, unsafe eval/exec, temp file misuse, path traversal, and secrets in code. Propose concrete fixes.",
+        "Linting/formatting: Make code PEP 8 compliant and ruff-friendly. Provide a minimal change set and config suggestions.",
+        "Onboarding guide: Explain project purpose, structure, setup, run, and troubleshooting. Produce a polished README draft.",
+        "Modularization plan: Break monolithic scripts into packages/modules. Provide a step-by-step migration plan with clear boundaries.",
+        "Logging & errors: Standardize logging (levels, structure), replace prints, and improve exception handling with actionable messages.",
+        "High-level review: architecture and risks; produce a concise README outline.",
+        "Write tests for core modules; list edge cases first; target ~90% coverage.",
+        "Refactor for clarity, add type hints, keep behavior identical."
+    ],
+    "prompt_mru": [
+        "I'm good. I have ner spokent to an AI before, what should I expect?",
+        "hi there",
+        "another test",
+        "this is a test",
+        "this is a testthis is a test",
+        "Hi can you see this?"
+    ],
+    "primer_header": "",
+    "manual_prompt_history": [],
+    "history": {
+        "diffs": [],
+        "prompts": []
+    },
+    "model_metadata": {}
+}

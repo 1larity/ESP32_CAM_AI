@@ -22,6 +22,7 @@ from models import ModelManager
 from enrollment_service import EnrollmentService
 from events_pane import EventsPane
 from discovery_dialog import DiscoveryDialog
+from ip_cam_dialog import AddIpCameraDialog
 
 
 # -----------------------------------------------------------------------------
@@ -75,9 +76,43 @@ class CameraWidget(QtWidgets.QWidget):
 
         lay = QtWidgets.QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
+
+        # --- toolbar row (per-camera controls + AI switches) ---
+        tb = QtWidgets.QHBoxLayout()
+
+        self.btn_rec = QtWidgets.QPushButton("● REC")
+        self.btn_snap = QtWidgets.QPushButton("Snapshot")
+
+        self.cb_ai    = QtWidgets.QCheckBox("AI")
+        self.cb_yolo  = QtWidgets.QCheckBox("YOLO")
+        self.cb_faces = QtWidgets.QCheckBox("Faces")
+        self.cb_pets  = QtWidgets.QCheckBox("Pets")
+
+        self.cb_ai.setChecked(True)
+        self.cb_yolo.setChecked(True)
+        self.cb_faces.setChecked(True)
+        self.cb_pets.setChecked(True)
+
+        self.btn_fit = QtWidgets.QPushButton("Fit")
+        self.btn_100 = QtWidgets.QPushButton("100%")
+
+        tb.addWidget(self.btn_rec)
+        tb.addWidget(self.btn_snap)
+        tb.addSpacing(12)
+        tb.addWidget(self.cb_ai)
+        tb.addWidget(self.cb_yolo)
+        tb.addWidget(self.cb_faces)
+        tb.addWidget(self.cb_pets)
+        tb.addStretch(1)
+        tb.addWidget(self.btn_fit)
+        tb.addWidget(self.btn_100)
+
+        lay.addLayout(tb)
         lay.addWidget(self.view)
 
+        # overlay flags / AI state
         self._overlays = OverlayFlags()
+        self._ai_enabled = True
         self._last_bgr = None
         self._last_ts = 0
 
@@ -105,6 +140,17 @@ class CameraWidget(QtWidgets.QWidget):
         self._frame_timer.setInterval(30)
         self._frame_timer.timeout.connect(self._poll_frame)
 
+        # wire toolbar actions
+        self.btn_fit.clicked.connect(self.fit_to_window)
+        self.btn_100.clicked.connect(self.zoom_100)
+        self.btn_snap.clicked.connect(self._snapshot)
+        self.btn_rec.clicked.connect(self._toggle_recording)
+
+        self.cb_ai.toggled.connect(self._on_ai_toggled)
+        self.cb_yolo.toggled.connect(self._on_overlay_changed)
+        self.cb_faces.toggled.connect(self._on_overlay_changed)
+        self.cb_pets.toggled.connect(self._on_overlay_changed)
+
         self._detector.start()
 
     # ---- lifecycle ----
@@ -126,9 +172,12 @@ class CameraWidget(QtWidgets.QWidget):
         self._last_bgr = frame
         self._last_ts = ts_ms
 
-        # Feed recorder and detector
+        # Feed recorder
         self._recorder.on_frame(frame, ts_ms)
-        self._detector.submit_frame(self.cam_cfg.name, frame, ts_ms)
+
+        # Feed detector only if AI enabled
+        if self._ai_enabled:
+            self._detector.submit_frame(self.cam_cfg.name, frame, ts_ms)
 
         # Show raw frame (detector callback will redraw with overlays)
         self._update_pixmap(frame, None)
@@ -137,7 +186,7 @@ class CameraWidget(QtWidgets.QWidget):
         qimg = qimage_from_bgr(bgr)
         pixmap = QtGui.QPixmap.fromImage(qimg)
 
-        if pkt is not None:
+        if pkt is not None and self._ai_enabled:
             painter = QtGui.QPainter(pixmap)
             try:
                 draw_overlays(painter, pkt, self._overlays)
@@ -149,13 +198,15 @@ class CameraWidget(QtWidgets.QWidget):
 
     @QtCore.pyqtSlot(object)
     def _on_detections(self, pkt_obj):
+        if not self._ai_enabled:
+            return
         pkt = pkt_obj
         if not isinstance(pkt, DetectionPacket):
             return
         if pkt.name != self.cam_cfg.name:
             return
 
-        # **DEBUG** show that GUI is receiving packets
+        # DEBUG show that GUI is receiving packets
         print(
             f"[GUI:{self.cam_cfg.name}] recv pkt ts={pkt.ts_ms} "
             f"yolo={len(pkt.yolo)} faces={len(pkt.faces)} pets={len(pkt.pets)}"
@@ -164,6 +215,35 @@ class CameraWidget(QtWidgets.QWidget):
         self._presence.update(pkt)
         if self._last_bgr is not None:
             self._update_pixmap(self._last_bgr, pkt)
+
+    # ---- recording / snapshot helpers ----
+    def _snapshot(self):
+        if self._last_bgr is None:
+            return
+        import cv2
+        import time
+        fname = f"{self.cam_cfg.name}_{time.strftime('%Y%m%d_%H%M%S')}.jpg"
+        path = self.app_cfg.output_dir / fname
+        path.parent.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(path), self._last_bgr)
+
+    def _toggle_recording(self):
+        if self._recorder.writer is None:
+            self._recorder.start()
+            self.btn_rec.setText("■ STOP")
+        else:
+            self._recorder.stop()
+            self.btn_rec.setText("● REC")
+
+    # ---- AI / overlay switches ----
+    def _on_ai_toggled(self, checked: bool):
+        self._ai_enabled = bool(checked)
+
+    def _on_overlay_changed(self):
+        self._overlays.yolo = self.cb_yolo.isChecked()
+        self._overlays.faces = self.cb_faces.isChecked()
+        self._overlays.pets = self.cb_pets.isChecked()
+        # tracks flag left as-is (no UI yet)
 
     # ---- view helpers for MainWindow ----
     def fit_to_window(self):
@@ -207,6 +287,8 @@ class MainWindow(QtWidgets.QMainWindow):
         sub = QtWidgets.QMdiSubWindow()
         sub.setWidget(w)
         sub.setWindowTitle(cam_cfg.name)
+        # remove Qt icon from cam windows
+        sub.setWindowIcon(QtGui.QIcon())
         self.mdi.addSubWindow(sub)
         w.start()
         sub.show()
@@ -223,10 +305,16 @@ class MainWindow(QtWidgets.QMainWindow):
             )
             self.app_cfg.cameras.append(cam_cfg)
             self._add_camera_window(cam_cfg)
+            save_settings(self.app_cfg)
 
     def _add_camera_ip_dialog(self):
-        dlg = DiscoveryDialog(self)
-        dlg.exec()
+        dlg = AddIpCameraDialog(self.app_cfg, self)
+        if dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+            cam_cfg = dlg.get_camera()
+            if cam_cfg is not None:
+                self.app_cfg.cameras.append(cam_cfg)
+                self._add_camera_window(cam_cfg)
+                save_settings(self.app_cfg)
 
     # ---- view / tools ----
     def _toggle_events_pane(self):
@@ -246,6 +334,14 @@ class MainWindow(QtWidgets.QMainWindow):
             w = sub.widget()
             if isinstance(w, CameraWidget):
                 w.zoom_100()
+
+    def _resize_all_to_video(self):
+        for sub in self.mdi.subWindowList():
+            w = sub.widget()
+            if isinstance(w, CameraWidget) and w._last_bgr is not None:
+                h, width = w._last_bgr.shape[:2]
+                # small padding for frame and title bar
+                sub.resize(width + 40, h + 80)
 
     def closeEvent(self, event: QtGui.QCloseEvent):
         for sub in self.mdi.subWindowList():
@@ -309,6 +405,7 @@ class MainWindow(QtWidgets.QMainWindow):
         m_view.addSeparator()
         m_view.addAction("Fit All").triggered.connect(self._fit_all)
         m_view.addAction("100% All").triggered.connect(self._100_all)
+        m_view.addAction("Resize windows to video size").triggered.connect(self._resize_all_to_video)
 
     def _open_enrollment(self):
         dlg = EnrollDialog(self.app_cfg, self)

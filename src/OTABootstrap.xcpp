@@ -1,0 +1,90 @@
+#include <WiFi.h>
+#include <Preferences.h>
+#include <WebServer.h>
+#include <ArduinoOTA.h>
+
+Preferences prefs;
+WebServer server(80);
+
+String ssid, pass;
+
+// --- Wi-Fi connection using stored credentials ---
+bool connectToStoredWiFi() {
+  prefs.begin("wifi", true);
+  ssid = prefs.getString("ssid", "");
+  pass = prefs.getString("pass", "");
+  prefs.end();
+
+  if (ssid.isEmpty()) return false;
+
+  Serial.printf("Connecting to stored WiFi: %s\n", ssid.c_str());
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid.c_str(), pass.c_str());
+
+  unsigned long t0 = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - t0 < 10000) delay(500);
+  return WiFi.status() == WL_CONNECTED;
+}
+
+// --- Simple config portal ---
+void startConfigPortal() {
+  WiFi.mode(WIFI_AP);
+  uint32_t chip = (uint32_t)(ESP.getEfuseMac() & 0xFFFFFF);
+  char apName[32];
+  snprintf(apName, sizeof(apName), "ESP32Cam-Setup-%06X", chip);
+  WiFi.softAP(apName);
+  Serial.printf("AP started: %s  IP: %s\n",
+                apName, WiFi.softAPIP().toString().c_str());
+
+  server.on("/", HTTP_GET, []() {
+    server.send(200, "text/html",
+      "<form action='/save' method='POST'>"
+      "SSID:<input name='s'><br>"
+      "Password:<input name='p' type='password'><br>"
+      "<input type='submit' value='Save & Reboot'></form>");
+  });
+
+  server.on("/save", HTTP_POST, []() {
+    String s = server.arg("s");
+    String p = server.arg("p");
+    prefs.begin("wifi", false);
+    prefs.putString("ssid", s);
+    prefs.putString("pass", p);
+    prefs.end();
+    server.send(200, "text/html", "Saved. Rebooting...");
+    delay(1000);
+    ESP.restart();
+  });
+
+  server.begin();
+  Serial.println("Config portal running. Connect and open http://192.168.4.1");
+}
+
+// --- OTA setup once STA connected ---
+void setupOTA() {
+  ArduinoOTA.setHostname("esp32cam");
+  ArduinoOTA.onStart([]() { Serial.println("OTA start"); });
+  ArduinoOTA.onEnd([]() { Serial.println("OTA end"); });
+  ArduinoOTA.begin();
+  Serial.println("OTA ready");
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(500);
+
+  if (!connectToStoredWiFi()) {
+    Serial.println("No stored WiFi, starting config portal");
+    startConfigPortal();
+  } else {
+    Serial.printf("Connected, IP=%s\n", WiFi.localIP().toString().c_str());
+    setupOTA();
+  }
+}
+
+void loop() {
+  if (WiFi.getMode() == WIFI_AP)
+    server.handleClient();
+  else
+    ArduinoOTA.handle();
+}
