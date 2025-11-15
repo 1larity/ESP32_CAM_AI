@@ -4,6 +4,7 @@
 ```
 cam discovery.py
 camera_recorder.py
+camera_widget.py
 detection_packet.py
 detectors.py
 discovery_dialog.py
@@ -13,6 +14,7 @@ events_pane.py
 face_params.py
 face_tuner.py
 gallery.py
+graphics_view.py
 image_manager.py
 ip_cam_dialog.py
 mdi_app.py
@@ -438,6 +440,205 @@ class CameraRecorder:
             elif ch == " ":
                 keep.append("_")
         return "".join(keep)[:64]
+
+```
+
+
+## FILE: AI/camera_widget.py
+```text
+# camera_widget.py
+from __future__ import annotations
+from typing import Optional
+import time
+import cv2
+from PyQt6 import QtCore, QtGui, QtWidgets
+
+from detectors import DetectorThread, DetectorConfig, DetectionPacket
+from overlays import OverlayFlags, draw_overlays
+from recorder import PrebufferRecorder
+from presence import PresenceBus
+from settings import AppSettings, CameraSettings
+from utils import qimage_from_bgr
+from stream import StreamCapture
+from graphics_view import GraphicsView
+from enrollment_service import EnrollmentService
+
+class CameraWidget(QtWidgets.QWidget):
+    def __init__(self, cam_cfg: CameraSettings, app_cfg: AppSettings,
+                 parent: Optional[QtWidgets.QWidget] = None):
+        super().__init__(parent)
+        self.cam_cfg = cam_cfg
+        self.app_cfg = app_cfg
+
+        # scene + view
+        self._scene = QtWidgets.QGraphicsScene(self)
+        self._pixmap_item = QtWidgets.QGraphicsPixmapItem()
+        self._scene.addItem(self._pixmap_item)
+        self.view = GraphicsView(self._scene, self)
+
+        lay = QtWidgets.QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+
+        # toolbar row
+        bar = QtWidgets.QHBoxLayout()
+        self.btn_rec = QtWidgets.QPushButton("● REC")
+        self.btn_snap = QtWidgets.QPushButton("Snapshot")
+        self.cb_ai = QtWidgets.QCheckBox("AI")
+        self.cb_yolo = QtWidgets.QCheckBox("YOLO")
+        self.cb_faces = QtWidgets.QCheckBox("Faces")
+        self.cb_pets = QtWidgets.QCheckBox("Pets")
+        self.btn_fit = QtWidgets.QPushButton("Fit")
+        self.btn_100 = QtWidgets.QPushButton("100%")
+
+        self.cb_ai.setChecked(True)
+        self.cb_yolo.setChecked(True)
+        self.cb_faces.setChecked(True)
+        self.cb_pets.setChecked(True)
+
+        bar.addWidget(self.btn_rec)
+        bar.addWidget(self.btn_snap)
+        bar.addSpacing(12)
+        bar.addWidget(self.cb_ai)
+        bar.addWidget(self.cb_yolo)
+        bar.addWidget(self.cb_faces)
+        bar.addWidget(self.cb_pets)
+        bar.addStretch(1)
+        bar.addWidget(self.btn_fit)
+        bar.addWidget(self.btn_100)
+
+        lay.addLayout(bar)
+        lay.addWidget(self.view)
+
+        self._overlays = OverlayFlags()
+        self._ai_enabled = True
+        self._last_bgr = None
+        self._last_ts = 0
+
+        self._recorder = PrebufferRecorder(
+            cam_name=self.cam_cfg.name,
+            out_dir=self.app_cfg.output_dir,
+            fps=25,
+            pre_ms=self.app_cfg.prebuffer_ms,
+        )
+        self._presence = PresenceBus(self.cam_cfg.name, self.app_cfg.logs_dir)
+
+        det_cfg = DetectorConfig.from_app(self.app_cfg)
+        self._detector = DetectorThread(det_cfg, self.cam_cfg.name)
+        self._detector.resultsReady.connect(self._on_detections)
+
+        self._capture = StreamCapture(self.cam_cfg)
+
+        self._frame_timer = QtCore.QTimer(self)
+        self._frame_timer.setInterval(30)
+        self._frame_timer.timeout.connect(self._poll_frame)
+
+        self.btn_fit.clicked.connect(self.fit_to_window)
+        self.btn_100.clicked.connect(self.zoom_100)
+        self.btn_snap.clicked.connect(self._snapshot)
+        self.btn_rec.clicked.connect(self._toggle_recording)
+        self.cb_ai.toggled.connect(self._on_ai_toggled)
+        self.cb_yolo.toggled.connect(self._on_overlay_changed)
+        self.cb_faces.toggled.connect(self._on_overlay_changed)
+        self.cb_pets.toggled.connect(self._on_overlay_changed)
+
+        self._detector.start()
+
+    # lifecycle
+    def start(self):
+        self._capture.start()
+        self._frame_timer.start()
+
+    def stop(self):
+        self._frame_timer.stop()
+        self._capture.stop()
+        self._detector.stop()
+        self._recorder.close()
+
+    # frame path
+    def _poll_frame(self):
+        ok, frame, ts_ms = self._capture.read()
+        if not ok or frame is None:
+            return
+        self._last_bgr = frame
+        self._last_ts = ts_ms
+
+        self._recorder.on_frame(frame, ts_ms)
+        if self._ai_enabled:
+            self._detector.submit_frame(self.cam_cfg.name, frame, ts_ms)
+        self._update_pixmap(frame, None)
+
+    def _update_pixmap(self, bgr, pkt: Optional[DetectionPacket]):
+        qimg = qimage_from_bgr(bgr)
+        pixmap = QtGui.QPixmap.fromImage(qimg)
+        if pkt is not None and self._ai_enabled:
+            p = QtGui.QPainter(pixmap)
+            try:
+                draw_overlays(p, pkt, self._overlays)
+            finally:
+                p.end()
+        self._pixmap_item.setPixmap(pixmap)
+        self._scene.setSceneRect(QtCore.QRectF(pixmap.rect()))
+
+    @QtCore.pyqtSlot(object)
+    def _on_detections(self, pkt_obj):
+        pkt = pkt_obj
+        if not isinstance(pkt, DetectionPacket):
+            return
+        if pkt.name != self.cam_cfg.name:
+            return
+
+        # DEBUG show that GUI is receiving packets
+        print(
+            f"[GUI:{self.cam_cfg.name}] recv pkt ts={pkt.ts_ms} "
+            f"yolo={len(pkt.yolo)} faces={len(pkt.faces)} pets={len(pkt.pets)}"
+        )
+
+        self._presence.update(pkt)
+        if self._last_bgr is not None:
+            self._update_pixmap(self._last_bgr, pkt)
+
+        # Feed enrollment service (if active) with this camera's detections
+        svc = EnrollmentService.instance()
+        if self._last_bgr is not None:
+            svc.on_detections(self.cam_cfg.name, self._last_bgr, pkt)
+
+    # helpers
+    def _snapshot(self):
+        if self._last_bgr is None:
+            return
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        fname = f"{self.cam_cfg.name}_{stamp}.jpg"
+        out = self.app_cfg.output_dir / fname
+        out.parent.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(out), self._last_bgr)
+
+    def _toggle_recording(self):
+        if self._recorder.writer is None:
+            self._recorder.start()
+            self.btn_rec.setText("■ STOP")
+        else:
+            self._recorder.stop()
+            self.btn_rec.setText("● REC")
+
+    def _on_ai_toggled(self, checked: bool):
+        self._ai_enabled = bool(checked)
+
+    def _on_overlay_changed(self):
+        self._overlays.yolo = self.cb_yolo.isChecked()
+        self._overlays.faces = self.cb_faces.isChecked()
+        self._overlays.pets = self.cb_pets.isChecked()
+
+    # view helpers
+    def fit_to_window(self):
+        self.view.fitInView(
+            self._scene.sceneRect(),
+            QtCore.Qt.AspectRatioMode.KeepAspectRatio
+        )
+        self.view._scale = 1.0
+
+    def zoom_100(self):
+        self.view.resetTransform()
+        self.view._scale = 1.0
 
 ```
 
@@ -1060,66 +1261,85 @@ class DiscoveryDialog(QtWidgets.QDialog):
 ## FILE: AI/enrollment.py
 ```text
 # enrollment.py
-# Progress UI with label and progress bar, bound to EnrollmentService signals.
 from __future__ import annotations
 from PyQt6 import QtWidgets, QtCore
-from settings import AppSettings
+from pathlib import Path
+from settings import AppSettings, BASE_DIR
 from enrollment_service import EnrollmentService
+
 
 class EnrollDialog(QtWidgets.QDialog):
     def __init__(self, app_cfg: AppSettings, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Enrollment")
+        self.setWindowTitle("Face Enrollment")
+        self.app_cfg = app_cfg
         self.svc = EnrollmentService.instance()
+        self.svc.status_changed.connect(self._on_status)
 
         self.name = QtWidgets.QLineEdit()
-        self.target = QtWidgets.QSpinBox(); self.target.setRange(5, 400); self.target.setValue(40)
-        self.btn_start = QtWidgets.QPushButton("Start Face Enrollment")
-        self.btn_stop = QtWidgets.QPushButton("Stop")
-        self.lbl_status = QtWidgets.QLabel("Idle")
-        self.pb = QtWidgets.QProgressBar(); self.pb.setRange(0, 100); self.pb.setValue(0)
+        self.target = QtWidgets.QSpinBox()
+        self.target.setRange(5, 200)
+        self.target.setValue(25)
+
+        # Camera selection
+        self.cam_combo = QtWidgets.QComboBox()
+        cam_names = [c.name for c in self.app_cfg.cameras]
+        if cam_names:
+            self.cam_combo.addItems(cam_names)
+        else:
+            self.cam_combo.addItem("(no cameras)")
+            self.cam_combo.setEnabled(False)
+
+        self.status = QtWidgets.QLabel("Idle")
+        self.pb = QtWidgets.QProgressBar()
+        self.pb.setRange(0, 100)
+        self.pb.setValue(0)
+
+        btn_start = QtWidgets.QPushButton("Start Face Enrollment")
+        btn_stop = QtWidgets.QPushButton("Stop")
+        btn_start.clicked.connect(self._start)
+        btn_stop.clicked.connect(self._stop)
 
         form = QtWidgets.QFormLayout()
         form.addRow("Name", self.name)
-        form.addRow("Samples", self.target)
-        btns = QtWidgets.QHBoxLayout(); btns.addWidget(self.btn_start); btns.addWidget(self.btn_stop)
+        form.addRow("Camera", self.cam_combo)
+        form.addRow("Samples target", self.target)
+
         lay = QtWidgets.QVBoxLayout(self)
-        lay.addLayout(form); lay.addLayout(btns); lay.addWidget(self.lbl_status); lay.addWidget(self.pb)
-
-        self.btn_start.clicked.connect(self._start)
-        self.btn_stop.clicked.connect(self.svc.end)
-        self.svc.status_changed.connect(self._on_status)
-
-        # preset last used name if dialog reopened quickly
-        self._on_status({
-            "active": self.svc.active, "name": self.svc.target_name,
-            "got": self.svc.samples_got, "need": self.svc.samples_needed,
-            "folder": "", "done": False
-        })
+        lay.addLayout(form)
+        lay.addWidget(self.status)
+        lay.addWidget(self.pb)
+        lay.addWidget(btn_start)
+        lay.addWidget(btn_stop)
 
     def _start(self):
         nm = self.name.text().strip()
         if not nm:
-            QtWidgets.QMessageBox.warning(self, "Enrollment", "Enter a name.")
+            QtWidgets.QMessageBox.warning(self, "Enroll", "Enter a name.")
             return
-        self.svc.begin_face(nm, int(self.target.value()))
+        if not self.cam_combo.isEnabled() or self.cam_combo.count() == 0:
+            QtWidgets.QMessageBox.warning(self, "Enroll", "No cameras available for enrollment.")
+            return
+        cam_name = self.cam_combo.currentText().strip() or None
+        # force faces dir under BASE_DIR/data/faces
+        faces_root = Path(BASE_DIR) / "data" / "faces"
+        faces_root.mkdir(parents=True, exist_ok=True)
+        self.svc.faces_dir = str(faces_root)
+        self.svc.begin_face(nm, int(self.target.value()), cam_name)
+        self.status.setText("Running…")
 
-    @QtCore.pyqtSlot(dict)
-    def _on_status(self, st: dict):
-        got = int(st.get("got", 0)); need = max(1, int(st.get("need", 1)))
-        pct = int(round(100.0 * got / need))
-        self.pb.setValue(pct)
-        nm = st.get("name", "")
-        active = bool(st.get("active", False))
-        done = bool(st.get("done", False))
-        if nm and not self.name.text().strip():
-            self.name.setText(nm)
-        if active:
-            self.lbl_status.setText(f"Collecting {got}/{need} → {st.get('folder','')}")
-        elif done:
-            self.lbl_status.setText(f"Done {got}/{need}. Training saved to models/lbph_faces.xml.")
+    def _stop(self):
+        self.svc.end()
+
+    @QtCore.pyqtSlot()
+    def _on_status(self):
+        st = self.svc.status_text
+        self.status.setText(st)
+        if self.svc.samples_needed:
+            pct = int(100 * self.svc.samples_got / self.svc.samples_needed)
         else:
-            self.lbl_status.setText("Idle")
+            pct = 0
+        self.pb.setValue(pct)
 
 ```
 
@@ -1127,139 +1347,236 @@ class EnrollDialog(QtWidgets.QDialog):
 ## FILE: AI/enrollment_service.py
 ```text
 # enrollment_service.py
-# Progress signals, reliable saving, debounce, and final LBPH training + labels.
 from __future__ import annotations
+from dataclasses import dataclass
+from typing import Optional, List
 from pathlib import Path
 import json
-import time
+
 import cv2 as cv
 import numpy as np
 from PyQt6 import QtCore
 
+from detectors import DetectionPacket
 from settings import BASE_DIR
 
-class EnrollmentService(QtCore.QObject):
-    _inst = None
 
-    # Emitted on any state change:
-    #   {"active":bool,"name":str,"got":int,"need":int,"folder":str,"done":bool}
-    status_changed = QtCore.pyqtSignal(dict)
+@dataclass
+class _EnrollState:
+    active: bool = False
+    kind: str = "face"          # only "face" for now
+    name: str = ""
+    samples_needed: int = 0
+    samples_got: int = 0
+    faces_dir: str = ""
+    status: str = "Idle"
+
+
+class EnrollmentService(QtCore.QObject):
+    """
+    Singleton service handling face enrollment and LBPH model training.
+
+    Usage:
+      svc = EnrollmentService.instance()
+      svc.begin_face(name, n_samples, cam_name)
+      ...
+      svc.on_detections(cam_name, bgr, pkt)  # called by CameraWidget
+    """
+    status_changed = QtCore.pyqtSignal()
+
+    _instance: Optional["EnrollmentService"] = None
 
     def __init__(self):
         super().__init__()
-        self.active = False
-        self.target_name = ""
-        self.samples_needed = 0
-        self.samples_got = 0
-        self._last_save_ms = 0
-        self._last_gray = None
-        self.face_dir = BASE_DIR / "data" / "faces"
-        self.models_dir = BASE_DIR / "models"
-        self.face_dir.mkdir(parents=True, exist_ok=True)
-        self.models_dir.mkdir(parents=True, exist_ok=True)
+        self.state = _EnrollState()
+        self.faces_dir = str(Path(BASE_DIR) / "data" / "faces")
+        self.models_dir = str(Path(BASE_DIR) / "models")
+        self.cam_filter: Optional[str] = None
 
+    # ------------------------------------------------------------------ #
+    # singleton access
+    # ------------------------------------------------------------------ #
     @classmethod
     def instance(cls) -> "EnrollmentService":
-        if cls._inst is None:
-            cls._inst = EnrollmentService()
-        return cls._inst
+        if cls._instance is None:
+            cls._instance = EnrollmentService()
+        return cls._instance
 
-    # ---- session control ----
-    def start(self, name: str, n: int):
-        self.target_name = name.strip()
-        self.samples_needed = max(1, int(n))
-        self.samples_got = 0
-        self._last_save_ms = 0
-        self._last_gray = None
-        self.active = True
-        (self.face_dir / self.target_name).mkdir(parents=True, exist_ok=True)
-        self._emit()
+    # ------------------------------------------------------------------ #
+    # public API from UI
+    # ------------------------------------------------------------------ #
+    def begin_face(self, name: str, n: int, cam_name: Optional[str] = None):
+        """
+        Called by EnrollDialog. Starts collecting face samples.
+        """
+        self.start(name, n, cam_name)
+
+    def start(self, name: str, n: int, cam_name: Optional[str] = None):
+        s = self.state
+        s.active = True
+        s.kind = "face"
+        s.name = name
+        s.samples_needed = n
+        s.samples_got = 0
+        s.status = f"Collecting samples for {name} ({n} needed)"
+        self.cam_filter = cam_name
+        self.status_changed.emit()
 
     def end(self):
-        self.active = False
-        self._emit()
+        s = self.state
+        s.active = False
+        s.status = "Idle"
+        self.cam_filter = None
+        self.status_changed.emit()
 
-    # Called from CameraWidget._on_detections on each detection packet
-    def on_detections(self, cam_name: str, bgr: np.ndarray, pkt: DetectionPacket):
-        if not self.active or not self.target_name:
+    # ------------------------------------------------------------------ #
+    # properties / helpers
+    # ------------------------------------------------------------------ #
+    @property
+    def active(self) -> bool:
+        return self.state.active
+
+    @property
+    def status_text(self) -> str:
+        return self.state.status
+
+    @property
+    def samples_needed(self) -> int:
+        return self.state.samples_needed
+
+    @property
+    def samples_got(self) -> int:
+        return self.state.samples_got
+
+    def _emit_status(self, text: str):
+        self.state.status = text
+        self.status_changed.emit()
+
+    # ------------------------------------------------------------------ #
+    # main hook from CameraWidget
+    # ------------------------------------------------------------------ #
+    def on_detections(self, cam_name: str, bgr, pkt: DetectionPacket):
+        """
+        Called from CameraWidget._on_detections on each detection packet.
+        We pick the largest face ROI and save it as a grayscale PNG sample.
+        """
+        s = self.state
+        if not s.active:
             return
 
-        # pick largest face
-        best = None
+        # Only accept packets from the selected camera, if any
+        if self.cam_filter is not None and cam_name != self.cam_filter:
+            return
+
+        if not pkt.faces:
+            return
+
+        # choose largest face by area
+        best_face = None
         best_area = 0
         for f in pkt.faces:
             x1, y1, x2, y2 = f.xyxy
-            area = max(0, x2 - x1) * max(0, y2 - y1)
+            area = (x2 - x1) * (y2 - y1)
             if area > best_area:
                 best_area = area
-                best = (x1, y1, x2, y2)
-        if best is None:
+                best_face = f
+
+        if best_face is None:
             return
 
-        x1, y1, x2, y2 = best
-        gray = cv.cvtColor(bgr, cv.COLOR_BGR2GRAY)
-        roi = gray[y1:y2, x1:x2]
-        if roi.size == 0:
+        x1, y1, x2, y2 = best_face.xyxy
+        x1 = max(int(x1), 0)
+        y1 = max(int(y1), 0)
+        x2 = min(int(x2), bgr.shape[1])
+        y2 = min(int(y2), bgr.shape[0])
+        if x2 <= x1 or y2 <= y1:
             return
-        roi = cv.resize(roi, (128, 128), interpolation=cv.INTER_AREA)
 
-        # Simple debounce: don't save more than ~4 fps per cam
-        now_ms = time.monotonic_ns() // 1_000_000
-        if self._last_gray is not None and now_ms - self._last_save_ms < 250:
-            return
-        self._last_gray = roi
-        self.samples_got += 1
+        roi = bgr[y1:y2, x1:x2]
+        gray = cv.cvtColor(roi, cv.COLOR_BGR2GRAY)
+        gray = cv.resize(gray, (128, 128))
 
-        person_dir = self.face_dir / self.target_name
+        faces_root = Path(self.faces_dir)
+        faces_root.mkdir(parents=True, exist_ok=True)
+        person_dir = faces_root / s.name
         person_dir.mkdir(parents=True, exist_ok=True)
-        out_path = person_dir / f"{self.target_name}_{self.samples_got:04d}.png"
-        cv.imwrite(str(out_path), roi)
 
-        self._last_save_ms = now_ms
-        self._emit()
+        idx = s.samples_got + 1
+        out_path = person_dir / f"{idx:04d}.png"
+        cv.imwrite(str(out_path), gray)
 
-        if self.samples_got >= self.samples_needed:
-            self.active = False
-            self._emit()
-            self._train_lbph()
+        s.samples_got += 1
+        self._emit_status(
+            f"Collected {s.samples_got}/{s.samples_needed} for {s.name}"
+        )
 
-    # ---- internals ----
-    def _emit(self):
-        self.status_changed.emit({
-            "active": self.active,
-            "name": self.target_name,
-            "got": self.samples_got,
-            "need": self.samples_needed,
-            "folder": str(self.face_dir / self.target_name),
-            "done": (not self.active and self.samples_got >= self.samples_needed)
-        })
+        if s.samples_got >= s.samples_needed:
+            self._emit_status("Training LBPH model…")
+            ok = self._maybe_train_and_save()
+            if ok:
+                self._emit_status("Training complete.")
+            else:
+                self._emit_status("Training failed or no data.")
+            self.end()
 
-    def _train_lbph(self):
-        # Aggregate all persons; write model + labels
-        subs = [p for p in (self.face_dir).iterdir() if p.is_dir()]
-        imgs = []; labels = []; label_map = {}; next_id = 0
-        for p in sorted(subs):
-            label_map[p.name] = next_id
-            for f in sorted(list(p.glob("*.png")) + list(p.glob("*.jpg")) + list(p.glob("*.jpeg"))):
-                im = cv.imread(str(f), cv.IMREAD_GRAYSCALE)
-                if im is None:
+    # ------------------------------------------------------------------ #
+    # training helpers
+    # ------------------------------------------------------------------ #
+    def _maybe_train_and_save(self) -> bool:
+        """
+        Train LBPH face recogniser from faces_dir and save into models_dir.
+        Returns True on success, False otherwise.
+        """
+        faces_root = Path(self.faces_dir)
+        if not faces_root.exists():
+            self._emit_status("No faces directory to train from.")
+            return False
+
+        images: List[np.ndarray] = []
+        labels: List[int] = []
+        label_map: dict[str, int] = {}
+        label_id = 0
+
+        for person_dir in sorted(faces_root.iterdir()):
+            if not person_dir.is_dir():
+                continue
+            person_name = person_dir.name
+            if person_name not in label_map:
+                label_map[person_name] = label_id
+                label_id += 1
+            lbl = label_map[person_name]
+            for img_path in sorted(person_dir.glob("*.png")):
+                img = cv.imread(str(img_path), cv.IMREAD_GRAYSCALE)
+                if img is None:
                     continue
-                imgs.append(im); labels.append(next_id)
-            next_id += 1
-        if not imgs:
+                images.append(img)
+                labels.append(lbl)
+
+        if not images:
+            self._emit_status("No images found for training.")
             return False
-        try:
-            rec = cv.face.LBPHFaceRecognizer_create(radius=1, neighbors=8, grid_x=8, grid_y=8)
-        except Exception:
-            return False
-        rec.train(imgs, np.array(labels))
-        self.models_dir.mkdir(parents=True, exist_ok=True)
-        rec.write(str(self.models_dir / "lbph_faces.xml"))
-        with open(self.models_dir / "labels_faces.json", "w", encoding="utf-8") as fp:
-            json.dump(label_map, fp, indent=2)
-        self.status_changed.emit({"active": False, "name": self.target_name, "got": self.samples_got,
-                                  "need": self.samples_needed, "folder": str(self.face_dir), "done": True})
+
+        recognizer = cv.face.LBPHFaceRecognizer_create()
+        labels_np = np.array(labels, dtype=np.int32)
+        recognizer.train(images, labels_np)
+
+        models_dir = Path(self.models_dir)
+        models_dir.mkdir(parents=True, exist_ok=True)
+        model_path = models_dir / "lbph_faces.xml"
+        recognizer.write(str(model_path))
+
+        labels_path = models_dir / "labels_faces.json"
+        with labels_path.open("w", encoding="utf-8") as f:
+            json.dump(label_map, f, indent=2)
+
+        self._emit_status(f"Trained LBPH model with {len(label_map)} labels.")
         return True
+
+    def _train_lbph(self) -> bool:
+        """
+        Public helper used by the menu action 'Rebuild face model from disk…'.
+        """
+        return self._maybe_train_and_save()
 
 ```
 
@@ -1528,6 +1845,48 @@ class GalleryDialog(QtWidgets.QDialog):
 ```
 
 
+## FILE: AI/graphics_view.py
+```text
+# graphics_view.py
+from __future__ import annotations
+from typing import Optional
+from PyQt6 import QtCore, QtGui, QtWidgets
+
+
+class GraphicsView(QtWidgets.QGraphicsView):
+    zoomChanged = QtCore.pyqtSignal(float)
+
+    def __init__(self, scene: QtWidgets.QGraphicsScene,
+                 parent: Optional[QtWidgets.QWidget] = None):
+        super().__init__(scene, parent)
+        self.setRenderHints(
+            QtGui.QPainter.RenderHint.Antialiasing
+            | QtGui.QPainter.RenderHint.SmoothPixmapTransform
+            | QtGui.QPainter.RenderHint.TextAntialiasing
+        )
+        self.setDragMode(QtWidgets.QGraphicsView.DragMode.ScrollHandDrag)
+        self._scale = 1.0
+        self.setTransformationAnchor(QtWidgets.QGraphicsView.ViewportAnchor.NoAnchor)
+        self.setResizeAnchor(QtWidgets.QGraphicsView.ViewportAnchor.NoAnchor)
+        self.setMouseTracking(True)
+
+    def wheelEvent(self, e: QtGui.QWheelEvent):
+        if QtWidgets.QApplication.keyboardModifiers() == QtCore.Qt.KeyboardModifier.ControlModifier:
+            factor = 1.0 + (0.0015 * e.angleDelta().y())
+            self._scale = float(max(0.1, min(8.0, self._scale * factor)))
+            target = self.mapToScene(e.position().toPoint())
+            self.setTransformationAnchor(QtWidgets.QGraphicsView.ViewportAnchor.NoAnchor)
+            self.setResizeAnchor(QtWidgets.QGraphicsView.ViewportAnchor.NoAnchor)
+            self.setTransform(QtGui.QTransform())
+            self.scale(self._scale, self._scale)
+            self.centerOn(target)
+            self.zoomChanged.emit(self._scale)
+        else:
+            super().wheelEvent(e)
+
+```
+
+
 ## FILE: AI/image_manager.py
 ```text
 # image_manager.py
@@ -1682,186 +2041,22 @@ class AddIpCameraDialog(QtWidgets.QDialog):
 ## FILE: AI/mdi_app.py
 ```text
 # mdi_app.py
-# ESP32-CAM AI Viewer / Controller
-# Multi-camera MDI interface with YOLO + Face Recognition overlays,
-# enrollment, events dock, and discovery.
-# All PyQt6.
-
 from __future__ import annotations
 import sys
-from typing import Optional
 from PyQt6 import QtCore, QtGui, QtWidgets
 
-from detectors import DetectorThread, DetectorConfig, DetectionPacket
-from overlays import OverlayFlags, draw_overlays
-from recorder import PrebufferRecorder
-from presence import PresenceBus
 from settings import AppSettings, CameraSettings, load_settings, save_settings
-from utils import qimage_from_bgr, open_folder_or_warn
-from stream import StreamCapture
-from enrollment import EnrollDialog
+from utils import open_folder_or_warn
 from image_manager import ImageManagerDialog
 from models import ModelManager
+from enrollment import EnrollDialog
 from enrollment_service import EnrollmentService
 from events_pane import EventsPane
 from discovery_dialog import DiscoveryDialog
 from ip_cam_dialog import AddIpCameraDialog
+from camera_widget import CameraWidget
 
 
-# -----------------------------------------------------------------------------
-# GraphicsView with zoom + pan (used inside each CameraWidget)
-# -----------------------------------------------------------------------------
-class GraphicsView(QtWidgets.QGraphicsView):
-    zoomChanged = QtCore.pyqtSignal(float)
-
-    def __init__(self, scene: QtWidgets.QGraphicsScene, parent: Optional[QtWidgets.QWidget] = None):
-        super().__init__(scene, parent)
-        self.setRenderHints(
-            QtGui.QPainter.RenderHint.Antialiasing
-            | QtGui.QPainter.RenderHint.SmoothPixmapTransform
-            | QtGui.QPainter.RenderHint.TextAntialiasing
-        )
-        self.setDragMode(QtWidgets.QGraphicsView.DragMode.ScrollHandDrag)
-        self._scale = 1.0
-        self.setTransformationAnchor(QtWidgets.QGraphicsView.ViewportAnchor.NoAnchor)
-        self.setResizeAnchor(QtWidgets.QGraphicsView.ViewportAnchor.NoAnchor)
-        self.setMouseTracking(True)
-
-    def wheelEvent(self, e: QtGui.QWheelEvent):
-        if QtWidgets.QApplication.keyboardModifiers() == QtCore.Qt.KeyboardModifier.ControlModifier:
-            factor = 1.0 + (0.0015 * e.angleDelta().y())
-            self._scale = float(max(0.1, min(8.0, self._scale * factor)))
-            target = self.mapToScene(e.position().toPoint())
-            self.setTransformationAnchor(QtWidgets.QGraphicsView.ViewportAnchor.NoAnchor)
-            self.setResizeAnchor(QtWidgets.QGraphicsView.ViewportAnchor.NoAnchor)
-            self.setTransform(QtGui.QTransform())
-            self.scale(self._scale, self._scale)
-            self.centerOn(target)
-            self.zoomChanged.emit(self._scale)
-        else:
-            super().wheelEvent(e)
-
-
-# -----------------------------------------------------------------------------
-# CameraWidget for each camera window
-# -----------------------------------------------------------------------------
-class CameraWidget(QtWidgets.QWidget):
-    def __init__(self, cam_cfg: CameraSettings, app_cfg: AppSettings, parent: Optional[QtWidgets.QWidget] = None):
-        super().__init__(parent)
-        self.cam_cfg = cam_cfg
-        self.app_cfg = app_cfg
-
-        # Graphics scene + view for zoom/pan
-        self._scene = QtWidgets.QGraphicsScene(self)
-        self._pixmap_item = QtWidgets.QGraphicsPixmapItem()
-        self._scene.addItem(self._pixmap_item)
-        self.view = GraphicsView(self._scene, self)
-
-        lay = QtWidgets.QVBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.addWidget(self.view)
-
-        self._overlays = OverlayFlags()
-        self._last_bgr = None
-        self._last_ts = 0
-
-        # Prebuffer recorder: per-camera
-        self._recorder = PrebufferRecorder(
-            cam_name=self.cam_cfg.name,
-            out_dir=self.app_cfg.output_dir,
-            fps=25,
-            pre_ms=self.app_cfg.prebuffer_ms,
-        )
-
-        # Presence logging bus
-        self._presence = PresenceBus(self.cam_cfg.name, self.app_cfg.logs_dir)
-
-        # Detector thread
-        det_cfg = DetectorConfig.from_app(self.app_cfg)
-        self._detector = DetectorThread(det_cfg, self.cam_cfg.name)
-        self._detector.resultsReady.connect(self._on_detections)
-
-        # Stream capture backend
-        self._capture = StreamCapture(self.cam_cfg)
-
-        # Poll frames from StreamCapture
-        self._frame_timer = QtCore.QTimer(self)
-        self._frame_timer.setInterval(30)
-        self._frame_timer.timeout.connect(self._poll_frame)
-
-        self._detector.start()
-
-    # ---- lifecycle ----
-    def start(self):
-        self._capture.start()
-        self._frame_timer.start()
-
-    def stop(self):
-        self._frame_timer.stop()
-        self._capture.stop()
-        self._detector.stop()
-        self._recorder.close()
-
-    # ---- frame handling ----
-    def _poll_frame(self):
-        ok, frame, ts_ms = self._capture.read()
-        if not ok or frame is None:
-            return
-        self._last_bgr = frame
-        self._last_ts = ts_ms
-
-        # Feed recorder and detector
-        self._recorder.on_frame(frame, ts_ms)
-        self._detector.submit_frame(self.cam_cfg.name, frame, ts_ms)
-
-        # Show raw frame (detector callback will redraw with overlays)
-        self._update_pixmap(frame, None)
-
-    def _update_pixmap(self, bgr, pkt: Optional[DetectionPacket]):
-        qimg = qimage_from_bgr(bgr)
-        pixmap = QtGui.QPixmap.fromImage(qimg)
-
-        if pkt is not None:
-            painter = QtGui.QPainter(pixmap)
-            try:
-                draw_overlays(painter, pkt, self._overlays)
-            finally:
-                painter.end()
-
-        self._pixmap_item.setPixmap(pixmap)
-        self._scene.setSceneRect(QtCore.QRectF(pixmap.rect()))
-
-    @QtCore.pyqtSlot(object)
-    def _on_detections(self, pkt_obj):
-        pkt = pkt_obj
-        if not isinstance(pkt, DetectionPacket):
-            return
-        if pkt.name != self.cam_cfg.name:
-            return
-
-        # DEBUG show that GUI is receiving packets
-        print(
-            f"[GUI:{self.cam_cfg.name}] recv pkt ts={pkt.ts_ms} "
-            f"yolo={len(pkt.yolo)} faces={len(pkt.faces)} pets={len(pkt.pets)}"
-        )
-
-        self._presence.update(pkt)
-        if self._last_bgr is not None:
-            self._update_pixmap(self._last_bgr, pkt)
-
-    # ---- view helpers for MainWindow ----
-    def fit_to_window(self):
-        self.view.fitInView(self._scene.sceneRect(), QtCore.Qt.AspectRatioMode.KeepAspectRatio)
-        self.view._scale = 1.0
-
-    def zoom_100(self):
-        self.view.resetTransform()
-        self.view._scale = 1.0
-
-
-# -----------------------------------------------------------------------------
-# MainWindow
-# -----------------------------------------------------------------------------
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, app_cfg: AppSettings):
         super().__init__()
@@ -1872,7 +2067,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.mdi = QtWidgets.QMdiArea()
         self.setCentralWidget(self.mdi)
 
-        # Events pane dock
         self.events_pane = EventsPane(self.app_cfg.logs_dir, parent=self)
         self.dock_events = QtWidgets.QDockWidget("Events", self)
         self.dock_events.setWidget(self.events_pane)
@@ -1882,6 +2076,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._build_menus()
         self._load_initial_cameras()
 
+    # cameras
     def _load_initial_cameras(self):
         for cam in self.app_cfg.cameras:
             self._add_camera_window(cam)
@@ -1891,11 +2086,11 @@ class MainWindow(QtWidgets.QMainWindow):
         sub = QtWidgets.QMdiSubWindow()
         sub.setWidget(w)
         sub.setWindowTitle(cam_cfg.name)
+        sub.setWindowIcon(QtGui.QIcon())  # no Qt icon
         self.mdi.addSubWindow(sub)
         w.start()
         sub.show()
 
-    # ---- camera adding ----
     def _add_camera_url_dialog(self):
         text, ok = QtWidgets.QInputDialog.getText(
             self, "Add Camera", "Enter RTSP or HTTP stream URL:"
@@ -1918,12 +2113,9 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._add_camera_window(cam_cfg)
                 save_settings(self.app_cfg)
 
-    # ---- view / tools ----
+    # view / tools
     def _toggle_events_pane(self):
-        if self.dock_events.isVisible():
-            self.dock_events.hide()
-        else:
-            self.dock_events.show()
+        self.dock_events.setVisible(not self.dock_events.isVisible())
 
     def _fit_all(self):
         for sub in self.mdi.subWindowList():
@@ -1937,6 +2129,13 @@ class MainWindow(QtWidgets.QMainWindow):
             if isinstance(w, CameraWidget):
                 w.zoom_100()
 
+    def _resize_all_to_video(self):
+        for sub in self.mdi.subWindowList():
+            w = sub.widget()
+            if isinstance(w, CameraWidget) and w._last_bgr is not None:
+                h, width = w._last_bgr.shape[:2]
+                sub.resize(width + 40, h + 80)
+
     def closeEvent(self, event: QtGui.QCloseEvent):
         for sub in self.mdi.subWindowList():
             w = sub.widget()
@@ -1946,27 +2145,19 @@ class MainWindow(QtWidgets.QMainWindow):
         super().closeEvent(event)
 
     def _build_menus(self):
-        menubar = self.menuBar()
+        mb = self.menuBar()
 
-        # File
-        m_file = menubar.addMenu("File")
-        act_add_ip = m_file.addAction("Add Camera by IP…")
-        act_add_ip.triggered.connect(self._add_camera_ip_dialog)
-        act_add_url = m_file.addAction("Add Camera by URL…")
-        act_add_url.triggered.connect(self._add_camera_url_dialog)
+        m_file = mb.addMenu("File")
+        m_file.addAction("Add Camera by IP…").triggered.connect(self._add_camera_ip_dialog)
+        m_file.addAction("Add Camera by URL…").triggered.connect(self._add_camera_url_dialog)
         m_file.addSeparator()
-        act_save = m_file.addAction("Save Settings")
-        act_save.triggered.connect(lambda: save_settings(self.app_cfg))
+        m_file.addAction("Save Settings").triggered.connect(lambda: save_settings(self.app_cfg))
         m_file.addSeparator()
-        act_exit = m_file.addAction("Exit")
-        act_exit.triggered.connect(self.close)
+        m_file.addAction("Exit").triggered.connect(self.close)
 
-        # Tools
-        m_tools = menubar.addMenu("Tools")
-        act_enroll = m_tools.addAction("Enrollment…")
-        act_enroll.triggered.connect(self._open_enrollment)
-        act_img_mgr = m_tools.addAction("Image Manager…")
-        act_img_mgr.triggered.connect(self._open_image_manager)
+        m_tools = mb.addMenu("Tools")
+        m_tools.addAction("Enrollment…").triggered.connect(self._open_enrollment)
+        m_tools.addAction("Image Manager…").triggered.connect(self._open_image_manager)
         m_tools.addSeparator()
         m_tools.addAction("Open models folder").triggered.connect(
             lambda: open_folder_or_warn(self, self.app_cfg.models_dir)
@@ -1984,37 +2175,32 @@ class MainWindow(QtWidgets.QMainWindow):
         m_tools.addSeparator()
         m_tools.addAction("Discover ESP32-CAMs…").triggered.connect(self._discover_esp32)
 
-        # Rebuild faces menu option
         act_rebuild_faces = QtGui.QAction("Rebuild face model from disk…", self)
         act_rebuild_faces.triggered.connect(self._rebuild_faces)
         m_tools.addAction(act_rebuild_faces)
 
-        # View
-        m_view = menubar.addMenu("View")
-        act_events = m_view.addAction("Events pane")
-        act_events.triggered.connect(self._toggle_events_pane)
+        m_view = mb.addMenu("View")
+        m_view.addAction("Events pane").triggered.connect(self._toggle_events_pane)
         m_view.addSeparator()
         m_view.addAction("Tile Subwindows").triggered.connect(self.mdi.tileSubWindows)
         m_view.addAction("Cascade Subwindows").triggered.connect(self.mdi.cascadeSubWindows)
         m_view.addSeparator()
         m_view.addAction("Fit All").triggered.connect(self._fit_all)
         m_view.addAction("100% All").triggered.connect(self._100_all)
+        m_view.addAction("Resize windows to video size").triggered.connect(self._resize_all_to_video)
 
+    # dialogs / tools
     def _open_enrollment(self):
-        dlg = EnrollDialog(self.app_cfg, self)
-        dlg.exec()
+        EnrollDialog(self.app_cfg, self).exec()
 
     def _open_image_manager(self):
-        dlg = ImageManagerDialog(self.app_cfg, self)
-        dlg.exec()
+        ImageManagerDialog(self.app_cfg, self).exec()
 
     def _discover_esp32(self):
-        dlg = DiscoveryDialog(self)
-        dlg.exec()
+        DiscoveryDialog(self).exec()
 
     def _rebuild_faces(self):
         svc = EnrollmentService.instance()
-        ok = False
         try:
             ok = svc._train_lbph()
         except Exception as e:
@@ -2030,9 +2216,6 @@ class MainWindow(QtWidgets.QMainWindow):
             )
 
 
-# -----------------------------------------------------------------------------
-# main()
-# -----------------------------------------------------------------------------
 def main():
     app = QtWidgets.QApplication(sys.argv)
     app.setApplicationName("ESP32-CAM AI Viewer")
