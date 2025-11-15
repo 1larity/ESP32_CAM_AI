@@ -1,61 +1,80 @@
 # enrollment.py
-# Progress UI with label and progress bar, bound to EnrollmentService signals.
 from __future__ import annotations
 from PyQt6 import QtWidgets, QtCore
-from settings import AppSettings
+from pathlib import Path
+from settings import AppSettings, BASE_DIR
 from enrollment_service import EnrollmentService
+
 
 class EnrollDialog(QtWidgets.QDialog):
     def __init__(self, app_cfg: AppSettings, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Enrollment")
+        self.setWindowTitle("Face Enrollment")
+        self.app_cfg = app_cfg
         self.svc = EnrollmentService.instance()
+        self.svc.status_changed.connect(self._on_status)
 
         self.name = QtWidgets.QLineEdit()
-        self.target = QtWidgets.QSpinBox(); self.target.setRange(5, 400); self.target.setValue(40)
-        self.btn_start = QtWidgets.QPushButton("Start Face Enrollment")
-        self.btn_stop = QtWidgets.QPushButton("Stop")
-        self.lbl_status = QtWidgets.QLabel("Idle")
-        self.pb = QtWidgets.QProgressBar(); self.pb.setRange(0, 100); self.pb.setValue(0)
+        self.target = QtWidgets.QSpinBox()
+        self.target.setRange(5, 200)
+        self.target.setValue(25)
+
+        # Camera selection
+        self.cam_combo = QtWidgets.QComboBox()
+        cam_names = [c.name for c in self.app_cfg.cameras]
+        if cam_names:
+            self.cam_combo.addItems(cam_names)
+        else:
+            self.cam_combo.addItem("(no cameras)")
+            self.cam_combo.setEnabled(False)
+
+        self.status = QtWidgets.QLabel("Idle")
+        self.pb = QtWidgets.QProgressBar()
+        self.pb.setRange(0, 100)
+        self.pb.setValue(0)
+
+        btn_start = QtWidgets.QPushButton("Start Face Enrollment")
+        btn_stop = QtWidgets.QPushButton("Stop")
+        btn_start.clicked.connect(self._start)
+        btn_stop.clicked.connect(self._stop)
 
         form = QtWidgets.QFormLayout()
         form.addRow("Name", self.name)
-        form.addRow("Samples", self.target)
-        btns = QtWidgets.QHBoxLayout(); btns.addWidget(self.btn_start); btns.addWidget(self.btn_stop)
+        form.addRow("Camera", self.cam_combo)
+        form.addRow("Samples target", self.target)
+
         lay = QtWidgets.QVBoxLayout(self)
-        lay.addLayout(form); lay.addLayout(btns); lay.addWidget(self.lbl_status); lay.addWidget(self.pb)
-
-        self.btn_start.clicked.connect(self._start)
-        self.btn_stop.clicked.connect(self.svc.end)
-        self.svc.status_changed.connect(self._on_status)
-
-        # preset last used name if dialog reopened quickly
-        self._on_status({
-            "active": self.svc.active, "name": self.svc.target_name,
-            "got": self.svc.samples_got, "need": self.svc.samples_needed,
-            "folder": "", "done": False
-        })
+        lay.addLayout(form)
+        lay.addWidget(self.status)
+        lay.addWidget(self.pb)
+        lay.addWidget(btn_start)
+        lay.addWidget(btn_stop)
 
     def _start(self):
         nm = self.name.text().strip()
         if not nm:
-            QtWidgets.QMessageBox.warning(self, "Enrollment", "Enter a name.")
+            QtWidgets.QMessageBox.warning(self, "Enroll", "Enter a name.")
             return
-        self.svc.begin_face(nm, int(self.target.value()))
+        if not self.cam_combo.isEnabled() or self.cam_combo.count() == 0:
+            QtWidgets.QMessageBox.warning(self, "Enroll", "No cameras available for enrollment.")
+            return
+        cam_name = self.cam_combo.currentText().strip() or None
+        # force faces dir under BASE_DIR/data/faces
+        faces_root = Path(BASE_DIR) / "data" / "faces"
+        faces_root.mkdir(parents=True, exist_ok=True)
+        self.svc.faces_dir = str(faces_root)
+        self.svc.begin_face(nm, int(self.target.value()), cam_name)
+        self.status.setText("Running…")
 
-    @QtCore.pyqtSlot(dict)
-    def _on_status(self, st: dict):
-        got = int(st.get("got", 0)); need = max(1, int(st.get("need", 1)))
-        pct = int(round(100.0 * got / need))
-        self.pb.setValue(pct)
-        nm = st.get("name", "")
-        active = bool(st.get("active", False))
-        done = bool(st.get("done", False))
-        if nm and not self.name.text().strip():
-            self.name.setText(nm)
-        if active:
-            self.lbl_status.setText(f"Collecting {got}/{need} → {st.get('folder','')}")
-        elif done:
-            self.lbl_status.setText(f"Done {got}/{need}. Training saved to models/lbph_faces.xml.")
+    def _stop(self):
+        self.svc.end()
+
+    @QtCore.pyqtSlot()
+    def _on_status(self):
+        st = self.svc.status_text
+        self.status.setText(st)
+        if self.svc.samples_needed:
+            pct = int(100 * self.svc.samples_got / self.svc.samples_needed)
         else:
-            self.lbl_status.setText("Idle")
+            pct = 0
+        self.pb.setValue(pct)
