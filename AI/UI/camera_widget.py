@@ -13,7 +13,7 @@ from detectors import DetectorThread, DetectorConfig, DetectionPacket
 from UI.graphics_view import GraphicsView
 from UI.overlays import OverlayFlags, draw_overlays
 from UI.graphics_view import GraphicsView
-
+from enrollment_service import EnrollmentService
 
 class CameraWidget(QtWidgets.QWidget):
     def __init__(self, cam_cfg: CameraSettings, app_cfg: AppSettings, parent: Optional[QtWidgets.QWidget] = None):
@@ -167,6 +167,9 @@ class CameraWidget(QtWidgets.QWidget):
 
         self._presence.update(pkt)
         if self._last_bgr is not None:
+            EnrollmentService.instance().on_detections(
+                self.cam_cfg.name, self._last_bgr, pkt
+            )
             self._update_pixmap(self._last_bgr, pkt)
 
     # ---- recording / snapshot helpers ----
