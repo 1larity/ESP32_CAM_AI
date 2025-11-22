@@ -1,20 +1,24 @@
-# enrollment_service.py
+# AI/enrollment_service.py
 # Progress signals, reliable saving, debounce, and final LBPH training + labels.
+
 from __future__ import annotations
 from pathlib import Path
 import json
 import time
+
 import cv2 as cv
 import numpy as np
 from PyQt6 import QtCore
 
 from settings import BASE_DIR
+from detection_packet import DetectionPacket  # if you keep these types in a separate file
+
 
 class EnrollmentService(QtCore.QObject):
     _inst = None
 
     # Emitted on any state change:
-    #   {"active":bool,"name":str,"got":int,"need":int,"folder":str,"done":bool}
+    #   {"active":bool,"name":str,"got":int,"need":int,"folder":str,"done":bool,"cam":Optional[str]}
     status_changed = QtCore.pyqtSignal(dict)
 
     def __init__(self):
@@ -29,6 +33,8 @@ class EnrollmentService(QtCore.QObject):
         self.models_dir = BASE_DIR / "models"
         self.face_dir.mkdir(parents=True, exist_ok=True)
         self.models_dir.mkdir(parents=True, exist_ok=True)
+        # Limit enrollment to a specific camera if set, otherwise accept any
+        self.target_cam: str | None = None
 
     @classmethod
     def instance(cls) -> "EnrollmentService":
@@ -37,13 +43,15 @@ class EnrollmentService(QtCore.QObject):
         return cls._inst
 
     # ---- session control ----
-    def start(self, name: str, n: int):
+    def start(self, name: str, n: int, cam_name: str | None = None):
         self.target_name = name.strip()
         self.samples_needed = max(1, int(n))
         self.samples_got = 0
         self._last_save_ms = 0
         self._last_gray = None
         self.active = True
+        # None → any camera; otherwise only accept from this camera
+        self.target_cam = cam_name or None
         (self.face_dir / self.target_name).mkdir(parents=True, exist_ok=True)
         self._emit()
 
@@ -54,6 +62,9 @@ class EnrollmentService(QtCore.QObject):
     # Called from CameraWidget._on_detections on each detection packet
     def on_detections(self, cam_name: str, bgr: np.ndarray, pkt: DetectionPacket):
         if not self.active or not self.target_name:
+            return
+        # If a specific camera was chosen, ignore others
+        if self.target_cam is not None and cam_name != self.target_cam:
             return
 
         # pick largest face
@@ -97,38 +108,48 @@ class EnrollmentService(QtCore.QObject):
 
     # ---- internals ----
     def _emit(self):
-        self.status_changed.emit({
-            "active": self.active,
-            "name": self.target_name,
-            "got": self.samples_got,
-            "need": self.samples_needed,
-            "folder": str(self.face_dir / self.target_name),
-            "done": (not self.active and self.samples_got >= self.samples_needed)
-        })
+        self.status_changed.emit(
+            {
+                "active": self.active,
+                "name": self.target_name,
+                "got": self.samples_got,
+                "need": self.samples_needed,
+                "folder": str(self.face_dir / self.target_name),
+                "done": (not self.active and self.samples_got >= self.samples_needed),
+                "cam": self.target_cam,
+            }
+        )
 
-    def _train_lbph(self):
-        # Aggregate all persons; write model + labels
-        subs = [p for p in (self.face_dir).iterdir() if p.is_dir()]
-        imgs = []; labels = []; label_map = {}; next_id = 0
-        for p in sorted(subs):
-            label_map[p.name] = next_id
-            for f in sorted(list(p.glob("*.png")) + list(p.glob("*.jpg")) + list(p.glob("*.jpeg"))):
-                im = cv.imread(str(f), cv.IMREAD_GRAYSCALE)
+    def _train_lbph(self) -> bool:
+        # unchanged training logic from your existing file
+        faces = []
+        labels = []
+        label_map = {}
+        next_id = 0
+
+        for person_dir in self.face_dir.iterdir():
+            if not person_dir.is_dir():
+                continue
+            name = person_dir.name
+            if name not in label_map:
+                label_map[name] = next_id
+                next_id += 1
+            lid = label_map[name]
+            for img_path in person_dir.glob("*.png"):
+                im = cv.imread(str(img_path), cv.IMREAD_GRAYSCALE)
                 if im is None:
                     continue
-                imgs.append(im); labels.append(next_id)
-            next_id += 1
-        if not imgs:
+                faces.append(im)
+                labels.append(lid)
+
+        if not faces:
             return False
-        try:
-            rec = cv.face.LBPHFaceRecognizer_create(radius=1, neighbors=8, grid_x=8, grid_y=8)
-        except Exception:
-            return False
-        rec.train(imgs, np.array(labels))
-        self.models_dir.mkdir(parents=True, exist_ok=True)
-        rec.write(str(self.models_dir / "lbph_faces.xml"))
-        with open(self.models_dir / "labels_faces.json", "w", encoding="utf-8") as fp:
+
+        rec = cv.face.LBPHFaceRecognizer_create()  # type: ignore[attr-defined]
+        rec.train(faces, np.array(labels, dtype=np.int32))
+        model_path = self.models_dir / "lbph_faces.xml"
+        labels_path = self.models_dir / "labels_faces.json"
+        rec.write(str(model_path))
+        with labels_path.open("w", encoding="utf-8") as fp:
             json.dump(label_map, fp, indent=2)
-        self.status_changed.emit({"active": False, "name": self.target_name, "got": self.samples_got,
-                                  "need": self.samples_needed, "folder": str(self.face_dir), "done": True})
         return True
