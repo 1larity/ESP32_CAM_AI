@@ -1,3 +1,13 @@
+Primary goals Preserve stability and functionality unless requested.
+Do not alter code unrelated to the task at hand.
+Always provide the full file contents.
+Try to keep files under 150 lines, if required create new files for new functionality or to delegate responsabilities.
+
+Remove the translucent fill on the recognition frames.
+Event view needs to have an autoscroll checkbox, when enabled, the display will follow the tail of newest events.
+log events should be time/datestamped.
+Even though i am correctly identified, that does not show up in the log. possibly over written by enter/exit person loglines.
+
 # Project: AI
 
 ## Structure
@@ -600,7 +610,7 @@ class CameraWidget(QtWidgets.QWidget):
         self._last_ts = 0
         self._locked = False
         self._last_pkt: Optional[DetectionPacket] = None
-        self._frame_counter = 0
+
         self._recorder = PrebufferRecorder(
             cam_name=self.cam_cfg.name,
             out_dir=self.app_cfg.output_dir,
@@ -621,8 +631,7 @@ class CameraWidget(QtWidgets.QWidget):
 
         # View actions
         self.act_fit.triggered.connect(self.fit_to_window)
-        self.act_100.triggered.connect(self.zoom_100)   # CHANGED
-
+        self.act_100.triggered.connect(self.zoom_100)   
         self.act_fit_win.triggered.connect(self.fit_window_to_video)
 
         # Buttons / overlay wiring
@@ -656,29 +665,18 @@ class CameraWidget(QtWidgets.QWidget):
 
     # frame path
     def _poll_frame(self):
-        import traceback
-        try:
-            ok, frame, ts_ms = self._capture.read()
-            if not ok or frame is None:
-                return
-            self._last_bgr = frame
-            self._last_ts = ts_ms
+        ok, frame, ts_ms = self._capture.read()
+        if not ok or frame is None:
+            return
+        self._last_bgr = frame
+        self._last_ts = ts_ms
 
-            self._recorder.on_frame(frame, ts_ms)
-            if self._ai_enabled:
-                self._detector.submit_frame(self.cam_cfg.name, frame, ts_ms)
+        self._recorder.on_frame(frame, ts_ms)
+        if self._ai_enabled:
+            self._detector.submit_frame(self.cam_cfg.name, frame, ts_ms)
 
-            pkt = self._last_pkt if (self._ai_enabled and self._last_pkt is not None) else None
-
-            self._frame_counter += 1
-            if self._frame_counter == 1:
-                print(f"[Camera:{self.cam_cfg.name}] first GUI frame {frame.shape[1]}x{frame.shape[0]}")
-
-            self._update_pixmap(frame, pkt)
-        except Exception as e:
-            print(f"[Camera:{self.cam_cfg.name}] _poll_frame error: {e}")
-            traceback.print_exc()
-
+        pkt = self._last_pkt if (self._ai_enabled and self._last_pkt is not None) else None
+        self._update_pixmap(frame, pkt)
 
     def _update_pixmap(self, bgr, pkt: Optional[DetectionPacket]):
         qimg = qimage_from_bgr(bgr)
@@ -687,8 +685,6 @@ class CameraWidget(QtWidgets.QWidget):
             p = QtGui.QPainter(pixmap)
             try:
                 draw_overlays(p, pkt, self._overlays, self.cam_cfg.name, time.time())
-            except Exception as exc:
-                print(f"[Camera:{self.cam_cfg.name}] overlay error: {exc!r}")
             finally:
                 p.end()
         self._pixmap_item.setPixmap(pixmap)
@@ -1898,45 +1894,26 @@ from pathlib import Path
 from typing import Dict, List
 from PyQt6 import QtWidgets, QtCore
 
-
 class EventsPane(QtWidgets.QWidget):
     def __init__(self, logs_dir: Path, parent=None):
         super().__init__(parent)
         self.logs_dir = Path(logs_dir)
-
         self.list = QtWidgets.QListWidget()
-        
-        self.cb_autoscroll = QtWidgets.QCheckBox("Auto-scroll")
-        self.cb_autoscroll.setChecked(True)
-
         self.btn_open = QtWidgets.QPushButton("Open Logs Folder")
         self.btn_clear = QtWidgets.QPushButton("Clear View")
-
-        btns = QtWidgets.QHBoxLayout()
-        btns.addWidget(self.cb_autoscroll)
-        btns.addStretch(1)
-        btns.addWidget(self.btn_open)
-        btns.addWidget(self.btn_clear)
-
-        lay = QtWidgets.QVBoxLayout(self)
-        lay.addWidget(self.list)
-        lay.addLayout(btns)
-
+        btns = QtWidgets.QHBoxLayout(); btns.addWidget(self.btn_open); btns.addStretch(1); btns.addWidget(self.btn_clear)
+        lay = QtWidgets.QVBoxLayout(self); lay.addWidget(self.list); lay.addLayout(btns)
         self.btn_open.clicked.connect(self._open_logs)
         self.btn_clear.clicked.connect(self.list.clear)
-
         self._pos: Dict[Path, int] = {}
-        self._timer = QtCore.QTimer(self)
-        self._timer.timeout.connect(self._poll)
-        self._timer.start(500)
+        self._timer = QtCore.QTimer(self); self._timer.timeout.connect(self._poll); self._timer.start(500)
 
     def _open_logs(self):
         from utils import open_folder_or_warn
         open_folder_or_warn(self, self.logs_dir)
 
     def _poll(self):
-        if not self.logs_dir.exists():
-            return
+        if not self.logs_dir.exists(): return
         for p in sorted(self.logs_dir.glob("*.jsonl")):
             last = self._pos.get(p, 0)
             try:
@@ -1952,8 +1929,6 @@ class EventsPane(QtWidgets.QWidget):
                         ev = rec.get("event")
                         typ = rec.get("type")
                         self.list.addItem(f"{cam} — {ev} {typ} @ {ts}")
-                        if self.cb_autoscroll.isChecked():
-                            self.list.scrollToBottom()
                     self._pos[p] = fp.tell()
             except FileNotFoundError:
                 self._pos.pop(p, None)
@@ -2809,9 +2784,9 @@ def draw_overlays(
 def _draw_box(p: QtGui.QPainter, b: DetBox, rgb):
     x1, y1, x2, y2 = b.xyxy
     rect = QtCore.QRectF(x1, y1, x2 - x1, y2 - y1)
-    # Thicker pen, no fill for recognition frames
+    # Thicker pen and translucent fill to make it obvious
     p.setPen(_pen(3, rgb))
-    p.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+    p.setBrush(_brush(rgb, 60))
     p.drawRect(rect)
 
 
@@ -2840,16 +2815,13 @@ def _draw_label(p: QtGui.QPainter, name: str, score: float, xyxy, rgb):
 ## FILE: AI/presence.py
 ```text
 # presence.py
-# Uses YOLO or faces to generate events.
+# Uses YOLO or faces to generate events; prevents “no events” when YOLO is absent.
 from __future__ import annotations
 import json
-import time
 from pathlib import Path
 from typing import Dict, Set
-
 from detectors import DetectionPacket
 from utils import ensure_dir
-
 
 class PresenceBus:
     def __init__(self, cam_name: str, logs_dir: Path, ttl_ms: int = 2500):
@@ -2860,72 +2832,35 @@ class PresenceBus:
         self.present: Set[str] = set()
 
     def update(self, pkt: DetectionPacket):
-        try:
-            now = pkt.ts_ms
-            seen: Set[str] = set()
+        now = pkt.ts_ms
+        seen = set()
+        # Prefer YOLO
+        for b in pkt.yolo:
+            if b.cls in ("person", "dog", "cat"):
+                seen.add(b.cls)
+        # Fallback: any face counts as a person presence
+        if not seen and pkt.faces:
+            seen.add("person")
 
-            # Prefer YOLO for coarse classes
-            for b in pkt.yolo:
-                if b.cls in ("person", "dog", "cat"):
-                    seen.add(b.cls)
+        # update timestamps
+        for k in seen:
+            self.last_seen[k] = now
 
-            # Named faces → separate keys (so they don’t get lost under generic "person")
-            for f in pkt.faces:
-                name = (f.cls or "").strip()
-                if name and name.lower() not in ("face", "unknown"):
-                    seen.add(f"person:{name}")
+        # exit events
+        for k in list(self.present):
+            if now - self.last_seen.get(k, 0) > self.ttl:
+                self.present.remove(k)
+                self._write({"ts": now, "camera": self.cam, "event": "exit", "type": k})
 
-            # Fallback: any face counts as generic person presence
-            if pkt.faces and not any(k.startswith("person") for k in seen):
-                seen.add("person")
-
-            # update timestamps
-            for k in seen:
-                self.last_seen[k] = now
-
-            # exit events
-            for k in list(self.present):
-                if now - self.last_seen.get(k, 0) > self.ttl:
-                    self.present.remove(k)
-                    self._write(
-                        {
-                            "ts": now,
-                            "camera": self.cam,
-                            "event": "exit",
-                            "type": k,
-                        }
-                    )
-
-            # enter events
-            for k in seen:
-                if k not in self.present:
-                    self.present.add(k)
-                    self._write(
-                        {
-                            "ts": now,
-                            "camera": self.cam,
-                            "event": "enter",
-                            "type": k,
-                        }
-                    )
-        except Exception as exc:
-            # Never let presence errors kill the UI / video loop
-            print(f"[Presence:{self.cam}] error in update: {exc!r}")
+        # enter events
+        for k in seen:
+            if k not in self.present:
+                self.present.add(k)
+                self._write({"ts": now, "camera": self.cam, "event": "enter", "type": k})
 
     def _write(self, rec: Dict):
         ensure_dir(self.logs_dir)
         f = self.logs_dir / f"{self.cam}.jsonl"
-
-        # Promote to wall-clock timestamp, keep ms for analysis
-        wall = time.time()
-        raw_ts = rec.get("ts")
-        if isinstance(raw_ts, (int, float)):
-            rec["ts_ms"] = int(raw_ts)
-        else:
-            rec["ts_ms"] = int(wall * 1000)
-
-        rec["ts"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(wall))
-
         with f.open("a", encoding="utf-8") as fp:
             fp.write(json.dumps(rec) + "\n")
 
@@ -4229,7 +4164,6 @@ class StreamCapture:
         self._q: "queue.Queue[Tuple[bool, Optional[np.ndarray], int]]" = queue.Queue(maxsize=2)
         self._t: Optional[threading.Thread] = None
         self.last_backend: str = "init"
-        self._logged_first: bool = False  # log first frame once
 
     # --- lifecycle ---------------------------------------------------------
     def start(self) -> None:
@@ -4245,12 +4179,9 @@ class StreamCapture:
             self._t.join(timeout=1.0)
 
     def read(self) -> Tuple[bool, Optional[np.ndarray], int]:
-        """Return (ok, frame, ts_ms). If no frame is ready, ok is False.
-
-        Non-blocking to avoid freezing the Qt GUI if the stream is slow or down.
-        """
+        """Return (ok, frame, ts_ms). If no frame is ready, ok is False."""
         try:
-            ok, frame, ts = self._q.get_nowait()
+            ok, frame, ts = self._q.get(timeout=0.25)
             return ok, frame, ts
         except queue.Empty:
             return False, None, 0
@@ -4283,22 +4214,12 @@ class StreamCapture:
                 self._sleep_with_cancel(1.0)
 
     def _offer(self, ok: bool, frame: Optional[np.ndarray], ts_ms: int) -> None:
-        """Offer a frame to the consumer, dropping the oldest."""
+        """Push a frame (or failure) into the small queue, dropping the oldest."""
         if self._q.full():
             try:
                 self._q.get_nowait()
             except queue.Empty:
                 pass
-
-        if ok and frame is not None and not self._logged_first:
-            self._logged_first = True
-            try:
-                h, w = frame.shape[:2]
-                print(f"[Camera:{self.cam.name}] first frame {w}x{h}, backend={self.last_backend}")
-            except Exception:
-                # best-effort only; don't let logging break the stream
-                pass
-
         self._q.put((ok, frame, ts_ms))
 
     def _fail_once(self, tag: str) -> None:

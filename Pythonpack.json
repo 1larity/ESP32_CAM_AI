@@ -2,9 +2,11 @@
     "profile_name": "Pythonpack",
     "project_root": "F:/share/code/Python/GPTsynch",
     "input_roots": [
-        "C:\\Users\\stellaris\\Documents\\PlatformIO\\Projects\\ESP32_CAM_AI\\AI"
+        "C:\\Users\\stellaris\\Documents\\PlatformIO\\Projects\\ESP32_CAM_AI\\AI",
+        "C:\\Users\\stellaris\\Documents\\PlatformIO\\Projects\\ESP32_CAM_AI\\AI\\stream",
+        "C:\\Users\\stellaris\\Documents\\PlatformIO\\Projects\\ESP32_CAM_AI\\AI\\detectors"
     ],
-    "include_children": true,
+    "include_children": false,
     "packs_dir": "C:\\Users\\stellaris\\Documents\\PlatformIO\\Projects\\ESP32_CAM_AI",
     "baselines_dir": "C:\\Users\\stellaris\\Documents\\PlatformIO\\Projects\\ESP32_CAM_AI",
     "model_backend": "selenium",
@@ -18,6 +20,8 @@
     ],
     "auto_update": false,
     "prompt_examples": [
+        "Primary goals Preserve stability and functionality unless requested.\nDo not alter code unrelated to the task at hand.\nAlways provide the full file contents.\nTry to keep files under 150 lines, if required create new files for new functionality or to delegate responsabilities.\n\nRemove the translucent fill on the recognition frames.\nEvent view needs to have an autoscroll checkbox, when enabled, the display will follow the tail of newest events.\nlog events should be time/datestamped.\nEven though i am correctly identified, that does not show up in the log. possibly over written by enter/exit person loglines.",
+        "Do not alter code unrelated to the task at hand.\nAlways provide the full file contents.\nTry to keep files under 150 lines, if required create new files for new functionality or to delegate responsabilities.",
         "Refactor for readability and maintainability. Prefer pure functions, remove dead code, add type hints where beneficial, keep behavior identical.",
         "Add comprehensive docstrings in Google style to public functions/classes. Include params, returns, raises, and short usage examples.",
         "Write unit tests for key modules. Target ~90% coverage. List critical test cases and edge conditions before writing tests.",
@@ -31,14 +35,7 @@
         "Write tests for core modules; list edge cases first; target ~90% coverage.",
         "Refactor for clarity, add type hints, keep behavior identical."
     ],
-    "prompt_mru": [
-        "I'm good. I have ner spokent to an AI before, what should I expect?",
-        "hi there",
-        "another test",
-        "this is a test",
-        "this is a testthis is a test",
-        "Hi can you see this?"
-    ],
+    "prompt_mru": [],
     "primer_header": "",
     "manual_prompt_history": [],
     "history": {
