@@ -1,14 +1,13 @@
-# graphics_view.py
 from __future__ import annotations
 from typing import Optional
+
 from PyQt6 import QtCore, QtGui, QtWidgets
 
 
 class GraphicsView(QtWidgets.QGraphicsView):
     zoomChanged = QtCore.pyqtSignal(float)
 
-    def __init__(self, scene: QtWidgets.QGraphicsScene,
-                 parent: Optional[QtWidgets.QWidget] = None):
+    def __init__(self, scene: QtWidgets.QGraphicsScene, parent: Optional[QtWidgets.QWidget] = None):
         super().__init__(scene, parent)
         self.setRenderHints(
             QtGui.QPainter.RenderHint.Antialiasing

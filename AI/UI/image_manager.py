@@ -5,7 +5,7 @@ from pathlib import Path
 from PyQt6 import QtWidgets
 from utils import open_folder_or_warn
 from settings import BASE_DIR
-from gallery import GalleryDialog
+from UI.gallery import GalleryDialog
 
 class ImageManagerDialog(QtWidgets.QDialog):
     def __init__(self, app_cfg, parent=None):
