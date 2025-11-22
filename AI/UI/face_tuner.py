@@ -1,6 +1,6 @@
 # face_tuner.py
 from __future__ import annotations
-from PySide6 import QtWidgets, QtCore
+from PyQt6 import QtWidgets, QtCore
 from face_params import FaceParams
 
 class FaceRecTunerDialog(QtWidgets.QDialog):
