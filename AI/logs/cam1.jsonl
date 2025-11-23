@@ -2580,3 +2580,9 @@
 {"ts": 283094557, "camera": "cam1", "event": "enter", "type": "person"}
 {"ts": 283488036, "camera": "cam1", "event": "enter", "type": "person"}
 {"ts": 283914655, "camera": "cam1", "event": "enter", "type": "person"}
+{"ts": 284196112, "camera": "cam1", "event": "enter", "type": "person"}
+{"ts": 284624669, "camera": "cam1", "event": "enter", "type": "person"}
+{"ts": 284858858, "camera": "cam1", "event": "enter", "type": "person"}
+{"ts": 285082291, "camera": "cam1", "event": "exit", "type": "person"}
+{"ts": 285082760, "camera": "cam1", "event": "enter", "type": "person"}
+{"ts": 285645562, "camera": "cam1", "event": "enter", "type": "person"}
