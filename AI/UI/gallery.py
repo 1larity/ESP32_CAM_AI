@@ -1,15 +1,17 @@
 # gallery.py
-# (unchanged from previous message except for a small guard to display empty dirs gracefully)
 from __future__ import annotations
 from pathlib import Path
 from typing import List
-import cv2 as cv, numpy as np
+
+import cv2 as cv
+import numpy as np
 from PyQt6 import QtWidgets, QtGui, QtCore
+
 
 def _thumb(path: Path, max_size: int = 160) -> QtGui.QPixmap:
     im = cv.imread(str(path), cv.IMREAD_UNCHANGED)
     if im is None:
-        return QtGui.QPixmap(160,160)
+        return QtGui.QPixmap(160, 160)
     if im.ndim == 2:
         im = cv.cvtColor(im, cv.COLOR_GRAY2RGB)
     elif im.shape[2] == 4:
@@ -18,31 +20,60 @@ def _thumb(path: Path, max_size: int = 160) -> QtGui.QPixmap:
         im = cv.cvtColor(im, cv.COLOR_BGR2RGB)
     h, w = im.shape[:2]
     s = max_size / float(max(h, w)) if max(h, w) else 1.0
-    im = cv.resize(im, (max(1, int(w*s)), max(1, int(h*s))), interpolation=cv.INTER_AREA)
-    qimg = QtGui.QImage(im.data, im.shape[1], im.shape[0], int(im.strides[0]), QtGui.QImage.Format.Format_RGB888).copy()
+    im = cv.resize(
+        im,
+        (max(1, int(w * s)), max(1, int(h * s))),
+        interpolation=cv.INTER_AREA,
+    )
+    qimg = QtGui.QImage(
+        im.data,
+        im.shape[1],
+        im.shape[0],
+        int(im.strides[0]),
+        QtGui.QImage.Format.Format_RGB888,
+    ).copy()
     return QtGui.QPixmap.fromImage(qimg)
+
 
 class GalleryDialog(QtWidgets.QDialog):
     def __init__(self, folder: Path, parent=None):
         super().__init__(parent)
         self.setWindowTitle(f"Gallery — {Path(folder).name}")
         self.folder = Path(folder)
+
+        # Icon + spacing constants so we can derive min size for 5x5 grid
+        icon_size = 160
+        spacing = 8
+
         self.view = QtWidgets.QListWidget()
         self.view.setResizeMode(QtWidgets.QListView.ResizeMode.Adjust)
         self.view.setViewMode(QtWidgets.QListView.ViewMode.IconMode)
-        self.view.setIconSize(QtCore.QSize(160, 160))
+        self.view.setIconSize(QtCore.QSize(icon_size, icon_size))
         self.view.setMovement(QtWidgets.QListView.Movement.Static)
-        self.view.setSpacing(8)
-        self.view.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.view.setSpacing(spacing)
+        self.view.setSelectionMode(
+            QtWidgets.QAbstractItemView.SelectionMode.ExtendedSelection
+        )
+
+        # Ensure we can see at least 5x5 images without resizing the window
+        min_side = 5 * icon_size + 6 * spacing
+        self.view.setMinimumSize(QtCore.QSize(min_side, min_side))
+        # Allow for dialog chrome and buttons
+        self.setMinimumSize(min_side + 40, min_side + 120)
+
         self.btn_del = QtWidgets.QPushButton("Delete Selected")
         self.btn_prune = QtWidgets.QPushButton("Self-Prune Near Duplicates")
         self.btn_refresh = QtWidgets.QPushButton("Refresh")
 
         btns = QtWidgets.QHBoxLayout()
-        btns.addWidget(self.btn_refresh); btns.addStretch(1); btns.addWidget(self.btn_prune); btns.addWidget(self.btn_del)
+        btns.addWidget(self.btn_refresh)
+        btns.addStretch(1)
+        btns.addWidget(self.btn_prune)
+        btns.addWidget(self.btn_del)
 
         lay = QtWidgets.QVBoxLayout(self)
-        lay.addWidget(self.view); lay.addLayout(btns)
+        lay.addWidget(self.view)
+        lay.addLayout(btns)
 
         self.btn_refresh.clicked.connect(self._load)
         self.btn_del.clicked.connect(self._delete_selected)
@@ -70,14 +101,20 @@ class GalleryDialog(QtWidgets.QDialog):
             self.view.takeItem(self.view.row(it))
 
     def _self_prune(self):
-        files = [Path(self.view.item(i).data(QtCore.Qt.ItemDataRole.UserRole)) for i in range(self.view.count())]
+        files = [
+            Path(self.view.item(i).data(QtCore.Qt.ItemDataRole.UserRole))
+            for i in range(self.view.count())
+        ]
         imgs = []
         for f in files:
             im = cv.imread(str(f), cv.IMREAD_GRAYSCALE)
-            if im is None: continue
+            if im is None:
+                continue
             imgs.append((f, cv.resize(im, (160, 160), interpolation=cv.INTER_AREA)))
         if len(imgs) < 2:
-            QtWidgets.QMessageBox.information(self, "Self-Prune", "Not enough images to compare.")
+            QtWidgets.QMessageBox.information(
+                self, "Self-Prune", "Not enough images to compare."
+            )
             return
         orb = cv.ORB_create()
         kept = []
@@ -85,22 +122,29 @@ class GalleryDialog(QtWidgets.QDialog):
         for f, im in imgs:
             k, d = orb.detectAndCompute(im, None)
             if d is None or len(k) < 10:
-                kept.append((f, k, d)); continue
+                kept.append((f, k, d))
+                continue
             drop = False
             for fk, kk, dk in kept:
-                if dk is None: continue
+                if dk is None:
+                    continue
                 bf = cv.BFMatcher(cv.NORM_HAMMING, crossCheck=True)
                 m = bf.match(d, dk)
-                if not m: continue
+                if not m:
+                    continue
                 dmean = float(np.mean([mm.distance for mm in m]))
                 sim = 1.0 - (dmean / 100.0)
                 if sim >= 0.82:
-                    try: f.unlink()
-                    except Exception: pass
+                    try:
+                        f.unlink()
+                    except Exception:
+                        pass
                     pruned += 1
                     drop = True
                     break
             if not drop:
                 kept.append((f, k, d))
         self._load()
-        QtWidgets.QMessageBox.information(self, "Self-Prune", f"Removed {pruned} near-duplicates.")
+        QtWidgets.QMessageBox.information(
+            self, "Self-Prune", f"Removed {pruned} near-duplicates."
+        )

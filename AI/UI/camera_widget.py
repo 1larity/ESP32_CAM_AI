@@ -1,22 +1,28 @@
+# camera_widget.py
+# Per-camera widget: video view, AI overlays, recording, snapshots.
+
 from __future__ import annotations
 from typing import Optional
 
 from PyQt6 import QtCore, QtGui, QtWidgets
 
-from UI.overlays import OverlayFlags, draw_overlays
+from settings import AppSettings, CameraSettings
+from detectors import DetectorThread, DetectorConfig, DetectionPacket
 from recorder import PrebufferRecorder
 from presence import PresenceBus
-from settings import AppSettings, CameraSettings
 from utils import qimage_from_bgr
 from stream import StreamCapture
-from detectors import DetectorThread, DetectorConfig, DetectionPacket
-from UI.graphics_view import GraphicsView
-from UI.overlays import OverlayFlags, draw_overlays
-from UI.graphics_view import GraphicsView
 from enrollment_service import EnrollmentService
 
+from UI.graphics_view import GraphicsView
+from UI.overlays import OverlayFlags, draw_overlays
+
+
 class CameraWidget(QtWidgets.QWidget):
-    def __init__(self, cam_cfg: CameraSettings, app_cfg: AppSettings, parent: Optional[QtWidgets.QWidget] = None):
+    def __init__(self,
+                 cam_cfg: CameraSettings,
+                 app_cfg: AppSettings,
+                 parent: Optional[QtWidgets.QWidget] = None):
         super().__init__(parent)
         self.cam_cfg = cam_cfg
         self.app_cfg = app_cfg
@@ -36,10 +42,10 @@ class CameraWidget(QtWidgets.QWidget):
         self.btn_rec = QtWidgets.QPushButton("● REC")
         self.btn_snap = QtWidgets.QPushButton("Snapshot")
 
-        self.cb_ai    = QtWidgets.QCheckBox("AI")
-        self.cb_yolo  = QtWidgets.QCheckBox("YOLO")
+        self.cb_ai = QtWidgets.QCheckBox("AI")
+        self.cb_yolo = QtWidgets.QCheckBox("YOLO")
         self.cb_faces = QtWidgets.QCheckBox("Faces")
-        self.cb_pets  = QtWidgets.QCheckBox("Pets")
+        self.cb_pets = QtWidgets.QCheckBox("Pets")
 
         self.cb_ai.setChecked(True)
         self.cb_yolo.setChecked(True)
@@ -159,17 +165,15 @@ class CameraWidget(QtWidgets.QWidget):
         if pkt.name != self.cam_cfg.name:
             return
 
-        # DEBUG show that GUI is receiving packets
-        print(
-            f"[GUI:{self.cam_cfg.name}] recv pkt ts={pkt.ts_ms} "
-            f"yolo={len(pkt.yolo)} faces={len(pkt.faces)} pets={len(pkt.pets)}"
-        )
-
+        # Presence log
         self._presence.update(pkt)
+
         if self._last_bgr is not None:
+            # Feed enrollment service for the chosen (or any) camera
             EnrollmentService.instance().on_detections(
                 self.cam_cfg.name, self._last_bgr, pkt
             )
+            # Draw overlays
             self._update_pixmap(self._last_bgr, pkt)
 
     # ---- recording / snapshot helpers ----
@@ -203,7 +207,10 @@ class CameraWidget(QtWidgets.QWidget):
 
     # ---- view helpers for MainWindow ----
     def fit_to_window(self):
-        self.view.fitInView(self._scene.sceneRect(), QtCore.Qt.AspectRatioMode.KeepAspectRatio)
+        self.view.fitInView(
+            self._scene.sceneRect(),
+            QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+        )
         self.view._scale = 1.0
 
     def zoom_100(self):
