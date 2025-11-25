@@ -2,6 +2,7 @@
 # Per-camera widget: video view, AI overlays, recording, snapshots.
 
 from __future__ import annotations
+
 from typing import Optional
 
 from PyQt6 import QtCore, QtGui, QtWidgets
@@ -13,16 +14,20 @@ from presence import PresenceBus
 from utils import qimage_from_bgr
 from stream import StreamCapture
 from enrollment_service import EnrollmentService
-
 from UI.graphics_view import GraphicsView
 from UI.overlays import OverlayFlags, draw_overlays
 
 
+OVERLAY_PERSIST_MS = 500  # keep last detections for this long to reduce flicker
+
+
 class CameraWidget(QtWidgets.QWidget):
-    def __init__(self,
-                 cam_cfg: CameraSettings,
-                 app_cfg: AppSettings,
-                 parent: Optional[QtWidgets.QWidget] = None):
+    def __init__(
+        self,
+        cam_cfg: CameraSettings,
+        app_cfg: AppSettings,
+        parent: Optional[QtWidgets.QWidget] = None,
+    ):
         super().__init__(parent)
         self.cam_cfg = cam_cfg
         self.app_cfg = app_cfg
@@ -55,6 +60,32 @@ class CameraWidget(QtWidgets.QWidget):
         self.btn_fit = QtWidgets.QPushButton("Fit")
         self.btn_100 = QtWidgets.QPushButton("100%")
 
+        # Overlays menu button
+        self.btn_overlay_menu = QtWidgets.QToolButton()
+        self.btn_overlay_menu.setText("Overlays")
+        self.btn_overlay_menu.setPopupMode(
+            QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup
+        )
+        self.menu_overlays = QtWidgets.QMenu(self)
+
+        self.act_overlay_yolo = self.menu_overlays.addAction("YOLO boxes")
+        self.act_overlay_yolo.setCheckable(True)
+        self.act_overlay_yolo.setChecked(True)
+
+        self.act_overlay_faces = self.menu_overlays.addAction("Face labels")
+        self.act_overlay_faces.setCheckable(True)
+        self.act_overlay_faces.setChecked(True)
+
+        self.act_overlay_pets = self.menu_overlays.addAction("Pet labels")
+        self.act_overlay_pets.setCheckable(True)
+        self.act_overlay_pets.setChecked(True)
+
+        self.act_overlay_hud = self.menu_overlays.addAction("HUD (cam + time)")
+        self.act_overlay_hud.setCheckable(True)
+        self.act_overlay_hud.setChecked(True)
+
+        self.btn_overlay_menu.setMenu(self.menu_overlays)
+
         tb.addWidget(self.btn_rec)
         tb.addWidget(self.btn_snap)
         tb.addSpacing(12)
@@ -62,6 +93,7 @@ class CameraWidget(QtWidgets.QWidget):
         tb.addWidget(self.cb_yolo)
         tb.addWidget(self.cb_faces)
         tb.addWidget(self.cb_pets)
+        tb.addWidget(self.btn_overlay_menu)
         tb.addStretch(1)
         tb.addWidget(self.btn_fit)
         tb.addWidget(self.btn_100)
@@ -72,8 +104,10 @@ class CameraWidget(QtWidgets.QWidget):
         # overlay flags / AI state
         self._overlays = OverlayFlags()
         self._ai_enabled = True
-        self._last_bgr = None
-        self._last_ts = 0
+        self._last_bgr: Optional[object] = None
+        self._last_ts: int = 0
+        self._last_pkt: Optional[DetectionPacket] = None
+        self._last_pkt_ts: int = 0
 
         # Prebuffer recorder: per-camera
         self._recorder = PrebufferRecorder(
@@ -110,6 +144,11 @@ class CameraWidget(QtWidgets.QWidget):
         self.cb_faces.toggled.connect(self._on_overlay_changed)
         self.cb_pets.toggled.connect(self._on_overlay_changed)
 
+        self.act_overlay_yolo.toggled.connect(self._on_overlay_menu_changed)
+        self.act_overlay_faces.toggled.connect(self._on_overlay_menu_changed)
+        self.act_overlay_pets.toggled.connect(self._on_overlay_menu_changed)
+        self.act_overlay_hud.toggled.connect(self._on_overlay_menu_changed)
+
         self._detector.start()
 
     # ---- lifecycle ----
@@ -138,8 +177,15 @@ class CameraWidget(QtWidgets.QWidget):
         if self._ai_enabled:
             self._detector.submit_frame(self.cam_cfg.name, frame, ts_ms)
 
-        # Show raw frame (detector callback will redraw with overlays)
-        self._update_pixmap(frame, None)
+        # Use last detection packet for a short window to reduce overlay flicker
+        pkt_for_frame: Optional[DetectionPacket] = None
+        if self._last_pkt is not None:
+            age = ts_ms - self._last_pkt_ts
+            if 0 <= age <= OVERLAY_PERSIST_MS:
+                pkt_for_frame = self._last_pkt
+
+        # Draw current frame (optionally with last overlays)
+        self._update_pixmap(frame, pkt_for_frame)
 
     def _update_pixmap(self, bgr, pkt: Optional[DetectionPacket]):
         qimg = qimage_from_bgr(bgr)
@@ -168,12 +214,16 @@ class CameraWidget(QtWidgets.QWidget):
         # Presence log
         self._presence.update(pkt)
 
+        # Remember last packet for flicker-free overlays
+        self._last_pkt = pkt
+        self._last_pkt_ts = pkt.ts_ms
+
         if self._last_bgr is not None:
             # Feed enrollment service for the chosen (or any) camera
             EnrollmentService.instance().on_detections(
                 self.cam_cfg.name, self._last_bgr, pkt
             )
-            # Draw overlays
+            # Draw overlays immediately as well
             self._update_pixmap(self._last_bgr, pkt)
 
     # ---- recording / snapshot helpers ----
@@ -181,8 +231,9 @@ class CameraWidget(QtWidgets.QWidget):
         if self._last_bgr is None:
             return
         import cv2
-        import time
-        fname = f"{self.cam_cfg.name}_{time.strftime('%Y%m%d_%H%M%S')}.jpg"
+        import time as _time
+
+        fname = f"{self.cam_cfg.name}_{_time.strftime('%Y%m%d_%H%M%S')}.jpg"
         path = self.app_cfg.output_dir / fname
         path.parent.mkdir(parents=True, exist_ok=True)
         cv2.imwrite(str(path), self._last_bgr)
@@ -200,10 +251,27 @@ class CameraWidget(QtWidgets.QWidget):
         self._ai_enabled = bool(checked)
 
     def _on_overlay_changed(self):
+        """Checkboxes → flags + sync menu items."""
         self._overlays.yolo = self.cb_yolo.isChecked()
         self._overlays.faces = self.cb_faces.isChecked()
         self._overlays.pets = self.cb_pets.isChecked()
         # tracks flag left as-is (no UI yet)
+
+        self.act_overlay_yolo.setChecked(self._overlays.yolo)
+        self.act_overlay_faces.setChecked(self._overlays.faces)
+        self.act_overlay_pets.setChecked(self._overlays.pets)
+        self.act_overlay_hud.setChecked(self._overlays.hud)
+
+    def _on_overlay_menu_changed(self):
+        """Menu → flags + sync checkboxes."""
+        self._overlays.yolo = self.act_overlay_yolo.isChecked()
+        self._overlays.faces = self.act_overlay_faces.isChecked()
+        self._overlays.pets = self.act_overlay_pets.isChecked()
+        self._overlays.hud = self.act_overlay_hud.isChecked()
+
+        self.cb_yolo.setChecked(self._overlays.yolo)
+        self.cb_faces.setChecked(self._overlays.faces)
+        self.cb_pets.setChecked(self._overlays.pets)
 
     # ---- view helpers for MainWindow ----
     def fit_to_window(self):
