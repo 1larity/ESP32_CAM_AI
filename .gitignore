@@ -48,3 +48,23 @@ models/
 checkpoints/
 #training data
 *.jpg
+*.png
+
+# App artifacts (recordings, enrollment images)
+ai/recordings/*.mp4
+ai/recordings/*.avi
+ai/data/faces/**/*.jpg
+ai/data/faces/**/*.jpeg
+ai/data/faces/**/*.png
+ai/data/pets/dogs/**/*.jpg
+ai/data/pets/dogs/**/*.jpeg
+ai/data/pets/dogs/**/*.png
+ai/data/pets/cats/**/*.jpg
+ai/data/pets/cats/**/*.jpeg
+ai/data/pets/cats/**/*.png
+ai/cameras.json
+.pio
+.vscode/.browse.c_cpp.db*
+.vscode/c_cpp_properties.json
+.vscode/launch.json
+.vscode/ipch
