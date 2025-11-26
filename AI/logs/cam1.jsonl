@@ -2955,3 +2955,8 @@
 {"ts": 607648185, "camera": "cam1", "event": "enter", "type": "person"}
 {"ts": 607666587, "camera": "cam1", "event": "exit", "type": "person"}
 {"ts": 607666943, "camera": "cam1", "event": "enter", "type": "person"}
+{"ts": 608255342, "camera": "cam1", "event": "enter", "type": "person"}
+{"ts": 623184425, "camera": "cam1", "event": "enter", "type": "person"}
+{"ts": 623459727, "camera": "cam1", "event": "enter", "type": "person"}
+{"ts": 623620017, "camera": "cam1", "event": "enter", "type": "person"}
+{"ts": 624307380, "camera": "cam1", "event": "enter", "type": "person"}
