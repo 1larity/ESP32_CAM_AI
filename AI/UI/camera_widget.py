@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from typing import Optional
+import time  # **CHANGED**: used for HUD clock
 
 from PyQt6 import QtCore, QtGui, QtWidgets
 
@@ -18,10 +19,15 @@ from UI.graphics_view import GraphicsView
 from UI.overlays import OverlayFlags, draw_overlays
 
 
-OVERLAY_PERSIST_MS = 500  # keep last detections for this long to reduce flicker
-
-
 class CameraWidget(QtWidgets.QWidget):
+    """
+    One camera:
+      - StreamCapture → frames
+      - DetectorThread → DetectionPacket
+      - PrebufferRecorder → videos with pre-roll
+      - Overlays drawn via UI/overlays.py
+    """
+
     def __init__(
         self,
         cam_cfg: CameraSettings,
@@ -41,26 +47,16 @@ class CameraWidget(QtWidgets.QWidget):
         lay = QtWidgets.QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
 
-        # --- toolbar row (per-camera controls + AI switches) ---
+        # ------------------------------------------------------------------ toolbar row
         tb = QtWidgets.QHBoxLayout()
 
         self.btn_rec = QtWidgets.QPushButton("● REC")
         self.btn_snap = QtWidgets.QPushButton("Snapshot")
 
-        self.cb_ai = QtWidgets.QCheckBox("AI")
-        self.cb_yolo = QtWidgets.QCheckBox("YOLO")
-        self.cb_faces = QtWidgets.QCheckBox("Faces")
-        self.cb_pets = QtWidgets.QCheckBox("Pets")
-
-        self.cb_ai.setChecked(True)
-        self.cb_yolo.setChecked(True)
-        self.cb_faces.setChecked(True)
-        self.cb_pets.setChecked(True)
-
         self.btn_fit = QtWidgets.QPushButton("Fit")
         self.btn_100 = QtWidgets.QPushButton("100%")
 
-        # Overlays menu button
+        # Overlays menu button (rectangles + labels together, plus HUD)
         self.btn_overlay_menu = QtWidgets.QToolButton()
         self.btn_overlay_menu.setText("Overlays")
         self.btn_overlay_menu.setPopupMode(
@@ -68,31 +64,52 @@ class CameraWidget(QtWidgets.QWidget):
         )
         self.menu_overlays = QtWidgets.QMenu(self)
 
-        self.act_overlay_yolo = self.menu_overlays.addAction("YOLO boxes")
-        self.act_overlay_yolo.setCheckable(True)
-        self.act_overlay_yolo.setChecked(True)
+        # Single master toggle: all detection rectangles + labels
+        self.act_overlay_detections = self.menu_overlays.addAction(
+            "Detections (boxes + labels)"
+        )
+        self.act_overlay_detections.setCheckable(True)
+        self.act_overlay_detections.setChecked(True)
 
-        self.act_overlay_faces = self.menu_overlays.addAction("Face labels")
-        self.act_overlay_faces.setCheckable(True)
-        self.act_overlay_faces.setChecked(True)
-
-        self.act_overlay_pets = self.menu_overlays.addAction("Pet labels")
-        self.act_overlay_pets.setCheckable(True)
-        self.act_overlay_pets.setChecked(True)
-
+        # HUD: camera name + timestamp
         self.act_overlay_hud = self.menu_overlays.addAction("HUD (cam + time)")
         self.act_overlay_hud.setCheckable(True)
         self.act_overlay_hud.setChecked(True)
 
         self.btn_overlay_menu.setMenu(self.menu_overlays)
 
+        # AI menu button
+        self.btn_ai_menu = QtWidgets.QToolButton()
+        self.btn_ai_menu.setText("AI")
+        self.btn_ai_menu.setPopupMode(
+            QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup
+        )
+        self.menu_ai = QtWidgets.QMenu(self)
+
+        # **CHANGED**: AI master + per-feature toggles
+        self.act_ai_enabled = self.menu_ai.addAction("Enable AI")
+        self.act_ai_enabled.setCheckable(True)
+        self.act_ai_enabled.setChecked(True)
+
+        self.act_ai_yolo = self.menu_ai.addAction("YOLO")
+        self.act_ai_yolo.setCheckable(True)
+        self.act_ai_yolo.setChecked(True)
+
+        self.act_ai_faces = self.menu_ai.addAction("Faces")
+        self.act_ai_faces.setCheckable(True)
+        self.act_ai_faces.setChecked(True)
+
+        self.act_ai_pets = self.menu_ai.addAction("Pets")
+        self.act_ai_pets.setCheckable(True)
+        self.act_ai_pets.setChecked(True)
+
+        self.btn_ai_menu.setMenu(self.menu_ai)
+
+        # Assemble toolbar
         tb.addWidget(self.btn_rec)
         tb.addWidget(self.btn_snap)
         tb.addSpacing(12)
-        tb.addWidget(self.cb_ai)
-        tb.addWidget(self.cb_yolo)
-        tb.addWidget(self.cb_faces)
-        tb.addWidget(self.cb_pets)
+        tb.addWidget(self.btn_ai_menu)
         tb.addWidget(self.btn_overlay_menu)
         tb.addStretch(1)
         tb.addWidget(self.btn_fit)
@@ -101,13 +118,21 @@ class CameraWidget(QtWidgets.QWidget):
         lay.addLayout(tb)
         lay.addWidget(self.view)
 
-        # overlay flags / AI state
+        # ------------------------------------------------------------------ state
+
+        # Overlay flags / AI state
         self._overlays = OverlayFlags()
         self._ai_enabled = True
+
+        # **CHANGED**: guard to avoid recursive master-toggle updates
+        self._overlay_master_updating = False
+
         self._last_bgr: Optional[object] = None
         self._last_ts: int = 0
         self._last_pkt: Optional[DetectionPacket] = None
         self._last_pkt_ts: int = 0
+        # keep overlays around a bit to avoid flicker
+        self._overlay_ttl_ms: int = 750
 
         # Prebuffer recorder: per-camera
         self._recorder = PrebufferRecorder(
@@ -117,7 +142,7 @@ class CameraWidget(QtWidgets.QWidget):
             pre_ms=self.app_cfg.prebuffer_ms,
         )
 
-        # Presence logging bus
+        # Presence logging bus (per camera)
         self._presence = PresenceBus(self.cam_cfg.name, self.app_cfg.logs_dir)
 
         # Detector thread
@@ -133,40 +158,49 @@ class CameraWidget(QtWidgets.QWidget):
         self._frame_timer.setInterval(30)
         self._frame_timer.timeout.connect(self._poll_frame)
 
-        # wire toolbar actions
+        # Wire actions
         self.btn_fit.clicked.connect(self.fit_to_window)
         self.btn_100.clicked.connect(self.zoom_100)
         self.btn_snap.clicked.connect(self._snapshot)
         self.btn_rec.clicked.connect(self._toggle_recording)
 
-        self.cb_ai.toggled.connect(self._on_ai_toggled)
-        self.cb_yolo.toggled.connect(self._on_overlay_changed)
-        self.cb_faces.toggled.connect(self._on_overlay_changed)
-        self.cb_pets.toggled.connect(self._on_overlay_changed)
+        # **CHANGED**: connect AI + overlay menu actions
+        self.act_ai_enabled.toggled.connect(self._on_ai_toggled)
+        self.act_ai_yolo.toggled.connect(self._on_ai_yolo_toggled)
+        self.act_ai_faces.toggled.connect(self._on_ai_faces_toggled)
+        self.act_ai_pets.toggled.connect(self._on_ai_pets_toggled)
 
-        self.act_overlay_yolo.toggled.connect(self._on_overlay_menu_changed)
-        self.act_overlay_faces.toggled.connect(self._on_overlay_menu_changed)
-        self.act_overlay_pets.toggled.connect(self._on_overlay_menu_changed)
-        self.act_overlay_hud.toggled.connect(self._on_overlay_menu_changed)
+        self.act_overlay_detections.toggled.connect(self._on_overlay_master_toggled)
+        self.act_overlay_hud.toggled.connect(self._on_overlay_hud_toggled)
 
-        self._detector.start()
+        self.setWindowTitle(self.cam_cfg.name)
 
-    # ---- lifecycle ----
+    # ------------------------------------------------------------------ lifecycle
+
     def start(self):
+        """Start streaming + detection."""
         self._capture.start()
+        self._detector.start()
         self._frame_timer.start()
 
     def stop(self):
+        """Stop timers, detector, recorder, capture."""
         self._frame_timer.stop()
         self._capture.stop()
         self._detector.stop()
         self._recorder.close()
 
-    # ---- frame handling ----
+    def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # type: ignore[override]
+        self.stop()
+        event.accept()
+
+    # ------------------------------------------------------------------ frame handling
+
     def _poll_frame(self):
         ok, frame, ts_ms = self._capture.read()
         if not ok or frame is None:
             return
+
         self._last_bgr = frame
         self._last_ts = ts_ms
 
@@ -181,7 +215,7 @@ class CameraWidget(QtWidgets.QWidget):
         pkt_for_frame: Optional[DetectionPacket] = None
         if self._last_pkt is not None:
             age = ts_ms - self._last_pkt_ts
-            if 0 <= age <= OVERLAY_PERSIST_MS:
+            if 0 <= age <= self._overlay_ttl_ms:
                 pkt_for_frame = self._last_pkt
 
         # Draw current frame (optionally with last overlays)
@@ -191,12 +225,32 @@ class CameraWidget(QtWidgets.QWidget):
         qimg = qimage_from_bgr(bgr)
         pixmap = QtGui.QPixmap.fromImage(qimg)
 
-        if pkt is not None and self._ai_enabled:
-            painter = QtGui.QPainter(pixmap)
-            try:
-                draw_overlays(painter, pkt, self._overlays)
-            finally:
-                painter.end()
+        # **CHANGED**: always paint; detections depend on AI, HUD does not
+        painter = QtGui.QPainter(pixmap)
+        try:
+            # Detection boxes/labels only if:
+            # - we have a packet
+            # - AI is enabled
+            # - at least one detection overlay type is active
+            if pkt is not None and self._ai_enabled:
+                detections_enabled = (
+                    getattr(self._overlays, "yolo", False)
+                    or getattr(self._overlays, "faces", False)
+                    or getattr(self._overlays, "pets", False)
+                    or getattr(self._overlays, "tracks", False)
+                )
+                if detections_enabled:
+                    # Temporarily suppress HUD inside overlays.py; we draw HUD ourselves
+                    orig_hud = getattr(self._overlays, "hud", False)
+                    self._overlays.hud = False
+                    draw_overlays(painter, pkt, self._overlays)
+                    self._overlays.hud = orig_hud
+
+            # HUD (camera name + date/time) is independent of AI on/off
+            if getattr(self._overlays, "hud", False):
+                self._draw_hud(painter)
+        finally:
+            painter.end()
 
         self._pixmap_item.setPixmap(pixmap)
         self._scene.setSceneRect(QtCore.QRectF(pixmap.rect()))
@@ -205,6 +259,7 @@ class CameraWidget(QtWidgets.QWidget):
     def _on_detections(self, pkt_obj):
         if not self._ai_enabled:
             return
+
         pkt = pkt_obj
         if not isinstance(pkt, DetectionPacket):
             return
@@ -219,14 +274,15 @@ class CameraWidget(QtWidgets.QWidget):
         self._last_pkt_ts = pkt.ts_ms
 
         if self._last_bgr is not None:
-            # Feed enrollment service for the chosen (or any) camera
+            # Feed enrollment service for this camera (or any, depending on configuration)
             EnrollmentService.instance().on_detections(
                 self.cam_cfg.name, self._last_bgr, pkt
             )
-            # Draw overlays immediately as well
+            # Draw overlays immediately on top of the last frame
             self._update_pixmap(self._last_bgr, pkt)
 
-    # ---- recording / snapshot helpers ----
+    # ------------------------------------------------------------------ recording / snapshot helpers
+
     def _snapshot(self):
         if self._last_bgr is None:
             return
@@ -239,6 +295,7 @@ class CameraWidget(QtWidgets.QWidget):
         cv2.imwrite(str(path), self._last_bgr)
 
     def _toggle_recording(self):
+        # PrebufferRecorder exposes writer; use that as "is recording" flag.
         if self._recorder.writer is None:
             self._recorder.start()
             self.btn_rec.setText("■ STOP")
@@ -246,34 +303,92 @@ class CameraWidget(QtWidgets.QWidget):
             self._recorder.stop()
             self.btn_rec.setText("● REC")
 
-    # ---- AI / overlay switches ----
+    # ------------------------------------------------------------------ AI / overlay switches
+
     def _on_ai_toggled(self, checked: bool):
         self._ai_enabled = bool(checked)
 
-    def _on_overlay_changed(self):
-        """Checkboxes → flags + sync menu items."""
-        self._overlays.yolo = self.cb_yolo.isChecked()
-        self._overlays.faces = self.cb_faces.isChecked()
-        self._overlays.pets = self.cb_pets.isChecked()
-        # tracks flag left as-is (no UI yet)
+    # **CHANGED**: per-feature AI menu items control overlay flags
+    def _on_ai_yolo_toggled(self, checked: bool):
+        self._overlays.yolo = bool(checked)
+        self._sync_overlay_master()
 
-        self.act_overlay_yolo.setChecked(self._overlays.yolo)
-        self.act_overlay_faces.setChecked(self._overlays.faces)
-        self.act_overlay_pets.setChecked(self._overlays.pets)
-        self.act_overlay_hud.setChecked(self._overlays.hud)
+    def _on_ai_faces_toggled(self, checked: bool):
+        self._overlays.faces = bool(checked)
+        self._sync_overlay_master()
 
-    def _on_overlay_menu_changed(self):
-        """Menu → flags + sync checkboxes."""
-        self._overlays.yolo = self.act_overlay_yolo.isChecked()
-        self._overlays.faces = self.act_overlay_faces.isChecked()
-        self._overlays.pets = self.act_overlay_pets.isChecked()
-        self._overlays.hud = self.act_overlay_hud.isChecked()
+    def _on_ai_pets_toggled(self, checked: bool):
+        self._overlays.pets = bool(checked)
+        self._sync_overlay_master()
 
-        self.cb_yolo.setChecked(self._overlays.yolo)
-        self.cb_faces.setChecked(self._overlays.faces)
-        self.cb_pets.setChecked(self._overlays.pets)
+    def _sync_overlay_master(self):
+        """Keep 'Detections (boxes + labels)' in sync with YOLO/Faces/Pets."""
+        if self._overlay_master_updating:
+            return
+        any_on = (
+            getattr(self._overlays, "yolo", False)
+            or getattr(self._overlays, "faces", False)
+            or getattr(self._overlays, "pets", False)
+        )
+        self._overlay_master_updating = True
+        try:
+            self.act_overlay_detections.setChecked(any_on)
+        finally:
+            self._overlay_master_updating = False
 
-    # ---- view helpers for MainWindow ----
+    def _on_overlay_master_toggled(self, checked: bool):
+        """
+        Single menu item to toggle all detection rectangles + labels together.
+        """
+        self._overlay_master_updating = True
+        try:
+            enabled = bool(checked)
+            self._overlays.yolo = enabled
+            self._overlays.faces = enabled
+            self._overlays.pets = enabled
+
+            # Keep AI menu items in sync
+            self.act_ai_yolo.setChecked(enabled)
+            self.act_ai_faces.setChecked(enabled)
+            self.act_ai_pets.setChecked(enabled)
+        finally:
+            self._overlay_master_updating = False
+
+    def _on_overlay_hud_toggled(self, checked: bool):
+        """
+        Toggle HUD (camera name + date/timestamp).
+        """
+        self._overlays.hud = bool(checked)
+
+    # ------------------------------------------------------------------ HUD drawing (independent of AI)  **CHANGED**
+    def _draw_hud(self, p: QtGui.QPainter):
+        """
+        Draw camera name + current wall-clock date/time in the top-left corner.
+        This does not depend on AI or detection packets.
+        """
+        text = f"{self.cam_cfg.name}  {time.strftime('%Y-%m-%d %H:%M:%S')}"
+        margin = 6
+        p.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255)))
+        font = p.font()
+        font.setPointSize(max(font.pointSize(), 9))
+        p.setFont(font)
+
+        # Simple text background
+        metrics = QtGui.QFontMetrics(font)
+        w = metrics.horizontalAdvance(text) + margin * 2
+        h = metrics.height() + margin * 2
+        rect = QtCore.QRect(margin, margin, w, h)
+
+        bg = QtGui.QColor(0, 0, 0, 128)
+        p.fillRect(rect, bg)
+        p.drawText(
+            rect.adjusted(margin, margin // 2, -margin, 0),
+            QtCore.Qt.AlignmentFlag.AlignVCenter | QtCore.Qt.AlignmentFlag.AlignLeft,
+            text,
+        )
+
+    # ------------------------------------------------------------------ view helpers for MainWindow
+
     def fit_to_window(self):
         self.view.fitInView(
             self._scene.sceneRect(),
