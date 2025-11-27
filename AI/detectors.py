@@ -1,40 +1,19 @@
-# detectors.py
-# YOLO (ONNX) + Haar cascade + LBPH recognition, aligned to original monolithic MDI app.
-
 from __future__ import annotations
+
 import os
 import threading
 import time
-import json
-from dataclasses import dataclass, field
-from typing import Dict, List, Tuple, Optional
+from dataclasses import dataclass
+from typing import Optional, Tuple
 
 import cv2
 import numpy as np
 from PyQt6 import QtCore
 
 from utils import monotonic_ms
-
-# -------------------------------------------------------------------------
-# Data structures
-# -------------------------------------------------------------------------
-
-@dataclass
-class DetBox:
-    cls: str
-    score: float
-    xyxy: Tuple[int, int, int, int]
-
-
-@dataclass
-class DetectionPacket:
-    name: str
-    ts_ms: int
-    size: Tuple[int, int]
-    yolo: List[DetBox] = field(default_factory=list)
-    faces: List[DetBox] = field(default_factory=list)
-    pets: List[DetBox] = field(default_factory=list)
-    timing_ms: Dict[str, int] = field(default_factory=dict)
+from detection_core import run_yolo
+from lbph_faces import load_lbph, run_faces
+from detection_packet import DetectionPacket, DetBox  # re-export for overlays.py
 
 
 @dataclass
@@ -56,26 +35,6 @@ class DetectorConfig:
             face_cascade=str((m / "haarcascade_frontalface_default.xml").resolve()),
         )
 
-
-COCO_ID_TO_NAME: Dict[int, str] = {0: "person", 15: "cat", 16: "dog"}
-
-
-def _letterbox(img: np.ndarray, new_shape=640, color=114):
-    """Match original YOLODetector._letterbox: square 640x640 with padding."""
-    h, w = img.shape[:2]
-    r = min(new_shape / h, new_shape / w)
-    nh, nw = int(h * r), int(w * r)
-    resized = cv2.resize(img, (nw, nh))
-    canvas = np.full((new_shape, new_shape, 3), color, np.uint8)
-    top = (new_shape - nh) // 2
-    left = (new_shape - nw) // 2
-    canvas[top:top + nh, left:left + nw] = resized
-    return canvas, r, left, top
-
-
-# -------------------------------------------------------------------------
-# Detector thread
-# -------------------------------------------------------------------------
 
 class DetectorThread(QtCore.QThread):
     # Emit DetectionPacket as a generic Python object
@@ -117,10 +76,8 @@ class DetectorThread(QtCore.QThread):
         else:
             print(f"[Detector:{self.name}] Haar cascade not found at {self.cfg.face_cascade}")
 
-        # LBPH recogniser + labels (as in EnrollmentService)
-        self._rec = None
-        self._labels: Dict[int, str] = {}
-        self._load_lbph()
+        # LBPH recogniser + labels
+        self._rec, self._labels = load_lbph(self.models_dir)
 
         print(
             f"[Detector:{self.name}] init: net={'OK' if self._net is not None else 'NONE'}, "
@@ -129,34 +86,29 @@ class DetectorThread(QtCore.QThread):
             f"yolo_conf={self.cfg.yolo_conf}"
         )
 
-    def _load_lbph(self):
-        model_path = os.path.join(self.models_dir, "lbph_faces.xml")
-        labels_path = os.path.join(self.models_dir, "labels_faces.json")
-        try:
-            if os.path.exists(model_path):
-                # requires opencv-contrib-python
-                self._rec = cv2.face.LBPHFaceRecognizer_create()  # type: ignore[attr-defined]
-                self._rec.read(model_path)
-            if os.path.exists(labels_path):
-                with open(labels_path, "r", encoding="utf-8") as fp:
-                    m = json.load(fp)
-                # stored as {name: id}; invert
-                self._labels = {int(v): k for k, v in m.items()}
-        except Exception as e:
-            print(f"[Detector:{self.name}] LBPH disabled ({e})")
-            self._rec = None
-            self._labels = {}
+    def submit_frame(self, *args) -> None:
+        """
+        Backwards-compatible:
+        - submit_frame(bgr, ts_ms)
+        - submit_frame(name, bgr, ts_ms)  # 'name' is ignored (we already have self.name)
+        """
+        if len(args) == 2:
+            bgr, ts_ms = args
+        elif len(args) == 3:
+            _, bgr, ts_ms = args
+        else:
+            raise TypeError(
+                "submit_frame expected (bgr, ts_ms) or (name, bgr, ts_ms), "
+                f"got {len(args)} positional arguments"
+            )
 
-    def submit_frame(self, cam_name: str, bgr: np.ndarray, ts_ms: int):
-        if cam_name != self.name:
-            return
         with self._lock:
             self._latest = (bgr.copy(), ts_ms)
 
-    def stop(self):
+    def stop(self) -> None:
         self._stop.set()
 
-    def run(self):
+    def run(self) -> None:  # type: ignore[override]
         next_due = 0
         while not self._stop.is_set():
             now = monotonic_ms()
@@ -175,113 +127,27 @@ class DetectorThread(QtCore.QThread):
             pkt = DetectionPacket(self.name, ts_ms, (W, H))
             t0 = monotonic_ms()
 
-            # --- YOLO, following original YOLODetector.detect semantics ---
+            # --- YOLO, via detection_core.run_yolo ---
             if self._net is not None:
                 try:
-                    img, r, dx, dy = _letterbox(bgr, new_shape=640)
+                    yolo_boxes, pet_boxes, t_yolo = run_yolo(
+                        self._net, bgr, self.cfg.yolo_conf, self.cfg.yolo_nms
+                    )
+                    pkt.yolo.extend(yolo_boxes)
+                    pkt.pets.extend(pet_boxes)
+                    pkt.timing_ms["yolo_core"] = t_yolo
                 except Exception as e:
-                    print(f"[Detector:{self.name}] letterbox error: {e}")
-                    img, r, dx, dy = _letterbox(bgr, new_shape=640)
-
-                blob = cv2.dnn.blobFromImage(
-                    img, 1 / 255.0, (640, 640), swapRB=True, crop=False
-                )
-                self._net.setInput(blob)
-                out = self._net.forward()
-                out = np.squeeze(out)
-
-                if out.ndim == 2 and out.shape[0] in (84, 85):
-                    out = out.T
-                elif out.ndim == 3:
-                    o = out[0]
-                    out = o.T if o.shape[0] in (84, 85) else o
-
-                boxes: List[Tuple[float, float, float, float]] = []
-                scores: List[float] = []
-                ids: List[int] = []
-
-                for det in out:
-                    det = np.asarray(det).ravel()
-                    if det.shape[0] < 5:
-                        continue
-                    cx, cy, w, h = det[:4]
-                    if det.shape[0] >= 85:
-                        obj = float(det[4])
-                        cls_scores = det[5:]
-                        c = int(np.argmax(cls_scores))
-                        conf = obj * float(cls_scores[c])
-                    else:
-                        c = int(det[4])
-                        conf = float(det[5]) if det.shape[0] > 5 else 0.0
-                    if conf < self.cfg.yolo_conf:
-                        continue
-                    boxes.append((float(cx), float(cy), float(w), float(h)))
-                    scores.append(conf)
-                    ids.append(c)
-
-                # Map back to original image coordinates and filter by COCO classes of interest
-                for (cx, cy, w, h), conf, cid in zip(boxes, scores, ids):
-                    if cid not in COCO_ID_TO_NAME:
-                        continue
-                    cx0 = (cx - dx) / r
-                    cy0 = (cy - dy) / r
-                    w0 = w / r
-                    h0 = h / r
-                    x1 = max(0, int(cx0 - w0 / 2))
-                    y1 = max(0, int(cy0 - h0 / 2))
-                    x2 = min(W - 1, int(cx0 + w0 / 2))
-                    y2 = min(H - 1, int(cy0 + h0 / 2))
-                    label = COCO_ID_TO_NAME[cid]
-                    box = DetBox(label, float(conf), (x1, y1, x2, y2))
-                    pkt.yolo.append(box)
-                    if label in ("cat", "dog"):
-                        pkt.pets.append(box)
+                    print(f"[Detector:{self.name}] YOLO error: {e}")
 
             t1 = monotonic_ms()
 
-            # --- Faces + LBPH; matches original FaceDB.detect_faces / recognize_roi ---
+            # --- Faces + LBPH, via lbph_faces.run_faces ---
             if self._face is not None:
-                try:
-                    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-                    try:
-                        eq = cv2.createCLAHE(2.0, (8, 8)).apply(gray)
-                    except Exception:
-                        eq = cv2.equalizeHist(gray)
-
-                    minsz = max(40, int(0.12 * min(gray.shape[:2])))
-                    faces = self._face.detectMultiScale(eq, 1.1, 4, minSize=(minsz, minsz))
-                    if len(faces) == 0:
-                        faces = self._face.detectMultiScale(eq, 1.05, 3, minSize=(minsz, minsz))
-
-                    for (fx, fy, fw, fh) in faces:
-                        name = "face"
-                        score = 0.6
-                        if self._rec is not None:
-                            try:
-                                roi = gray[fy:fy + fh, fx:fx + fw]
-                                roi = cv2.resize(roi, (160, 160))
-                                pred, dist = self._rec.predict(roi)
-                                if 0 <= pred < len(self._labels) and dist <= 95.0:
-                                    label_name = self._labels.get(int(pred), "face")
-                                    name = label_name
-                                    score = max(0.0, min(1.0, 1.0 - (dist / 95.0)))
-                                else:
-                                    name = "unknown"
-                                    score = 0.4
-                                print(
-                                    f"[Detector:{self.name}] LBPH pred={pred} "
-                                    f"name={self._labels.get(int(pred), '?')} dist={dist:.1f} -> {name}"
-                                )
-                            except Exception as e:
-                                print(f"[Detector:{self.name}] LBPH predict error: {e}")
-                                name = "face"
-                                score = 0.6
-
-                        x1, y1, x2, y2 = fx, fy, fx + fw, fy + fh
-                        pkt.faces.append(DetBox(name, float(score), (x1, y1, x2, y2)))
-
-                except Exception as e:
-                    print(f"[Detector:{self.name}] face error: {e}")
+                face_boxes, t_faces = run_faces(
+                    bgr, self._face, self._rec, self._labels
+                )
+                pkt.faces.extend(face_boxes)
+                pkt.timing_ms["faces_core"] = t_faces
 
             t2 = monotonic_ms()
             pkt.timing_ms["yolo"] = int(t1 - t0)

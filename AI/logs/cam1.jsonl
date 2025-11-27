@@ -3001,3 +3001,12 @@
 {"ts": 632248606, "camera": "cam1", "event": "exit", "type": "person"}
 {"ts": 632248913, "camera": "cam1", "event": "enter", "type": "person"}
 {"ts": 632406746, "camera": "cam1", "event": "enter", "type": "person"}
+{"ts": 709502096, "camera": "cam1", "event": "enter", "type": "person"}
+{"ts": 709530183, "camera": "cam1", "event": "exit", "type": "person"}
+{"ts": 709531907, "camera": "cam1", "event": "enter", "type": "person"}
+{"ts": 709546570, "camera": "cam1", "event": "exit", "type": "person"}
+{"ts": 709547544, "camera": "cam1", "event": "enter", "type": "person"}
+{"ts": 709550166, "camera": "cam1", "event": "exit", "type": "person"}
+{"ts": 709552578, "camera": "cam1", "event": "enter", "type": "person"}
+{"ts": 709748046, "camera": "cam1", "event": "exit", "type": "person"}
+{"ts": 709748331, "camera": "cam1", "event": "enter", "type": "person"}
