@@ -8,7 +8,7 @@ import time
 import cv2
 import numpy as np
 
-from detection_packet import DetBox
+from .packet import DetBox
 
 
 def load_lbph(models_dir: str) -> Tuple[Optional[object], Dict[int, str]]:
