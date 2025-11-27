@@ -6,9 +6,9 @@ import time
 import cv2
 import numpy as np
 
-from detection_packet import DetBox
+from .packet import DetBox
 
-# Classes we care about from COCO
+
 COCO_ID_TO_NAME: Dict[int, str] = {0: "person", 15: "cat", 16: "dog"}
 
 
@@ -16,18 +16,11 @@ def run_yolo(
     net: cv2.dnn_Net,
     bgr: np.ndarray,
     conf_thresh: float,
-    nms_thresh: float,  # kept for future use, not currently applied
+    nms_thresh: float,
 ) -> Tuple[List[DetBox], List[DetBox], int]:
-    """
-    Run YOLO ONNX model and return (all_yolo_boxes, pet_boxes, elapsed_ms).
-
-    This is a functional extraction of the YOLO block from DetectorThread.run.
-    """
     start = time.monotonic()
 
     H, W = bgr.shape[:2]
-
-    # Letterbox to 640x640 like original _letterbox implementation
     img, r, dx, dy = _letterbox(bgr, new_shape=640)
 
     blob = cv2.dnn.blobFromImage(
@@ -66,7 +59,6 @@ def run_yolo(
         scores.append(conf)
         ids.append(c)
 
-    # Map back to original image coordinates and filter by COCO classes of interest
     yolo_boxes: List[DetBox] = []
     pet_boxes: List[DetBox] = []
 
@@ -92,10 +84,6 @@ def run_yolo(
 
 
 def _letterbox(img: np.ndarray, new_shape=640, color=114):
-    """
-    Match original YOLODetector._letterbox: square 640x640 with padding.
-    Returns (padded_image, scale, dx, dy).
-    """
     h, w = img.shape[:2]
     r = min(new_shape / h, new_shape / w)
     nh, nw = int(h * r), int(w * r)

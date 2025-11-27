@@ -1,12 +1,15 @@
-# detection_packet.py
+from __future__ import annotations
+
 from dataclasses import dataclass, field
-from typing import List, Tuple, Dict
+from typing import Dict, List, Tuple
+
 
 @dataclass
 class DetBox:
     cls: str
     score: float
     xyxy: Tuple[int, int, int, int]
+
 
 @dataclass
 class DetectionPacket:

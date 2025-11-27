@@ -3010,3 +3010,14 @@
 {"ts": 709552578, "camera": "cam1", "event": "enter", "type": "person"}
 {"ts": 709748046, "camera": "cam1", "event": "exit", "type": "person"}
 {"ts": 709748331, "camera": "cam1", "event": "enter", "type": "person"}
+{"ts": 711913039, "camera": "cam1", "event": "enter", "type": "person"}
+{"ts": 711955040, "camera": "cam1", "event": "exit", "type": "person"}
+{"ts": 712066789, "camera": "cam1", "event": "enter", "type": "person"}
+{"ts": 712069514, "camera": "cam1", "event": "exit", "type": "person"}
+{"ts": 712229430, "camera": "cam1", "event": "enter", "type": "person"}
+{"ts": 712232406, "camera": "cam1", "event": "exit", "type": "person"}
+{"ts": 712943028, "camera": "cam1", "event": "enter", "type": "person"}
+{"ts": 712945601, "camera": "cam1", "event": "exit", "type": "person"}
+{"ts": 712965411, "camera": "cam1", "event": "enter", "type": "person"}
+{"ts": 713169962, "camera": "cam1", "event": "exit", "type": "person"}
+{"ts": 713174012, "camera": "cam1", "event": "enter", "type": "person"}
