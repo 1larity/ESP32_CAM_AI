@@ -7,106 +7,103 @@ def attach_view_handlers(cls) -> None:
     """
     Inject fit/zoom/lock/scrollbar helpers into CameraWidget.
 
-    This file assumes the CameraWidget already defines:
+    Assumes CameraWidget defines:
       - self.view              : QGraphicsView
       - self._scene            : QGraphicsScene
       - self._pixmap_item      : QGraphicsPixmapItem
-      - self.btn_*             : toolbar buttons
-      - self.act_ai_*          : AI actions
-      - self.act_overlay_*     : overlay actions
-      - self._locked           : bool, initialised to False
+      - self.btn_rec / btn_snap / btn_overlay_menu / btn_ai_menu / btn_view_menu
+      - self.act_ai_* / self.act_overlay_*
+      - self._locked           : bool
       - self._subwindow        : QMdiSubWindow | None
-      - self._locked_geometry  : QRect | None
+      - self._locked_geometry  : QRect
     """
+
+    def _find_mdi_subwindow(self) -> QtWidgets.QMdiSubWindow | None:
+        """
+        Walk up the parent chain to find the QMdiSubWindow that hosts this widget.
+        """
+        w: QtWidgets.QWidget | None = self.parentWidget()
+        while w is not None:
+            if isinstance(w, QtWidgets.QMdiSubWindow):
+                return w
+            w = w.parentWidget()
+        return None
 
     def fit_window_to_video(self) -> None:
         """
-        Resize the camera *subwindow* so that the visible video area matches
+        Resize the camera subwindow so that the visible video area matches
         the current frame size at the current zoom level.
-
-        Also updates scrollbars so that when the window exactly fits the video,
-        no scrollbars are shown.
         """
+        if self._pixmap_item.pixmap().isNull():
+            return
+
         pixmap = self._pixmap_item.pixmap()
-        if pixmap.isNull():
+        video_w = pixmap.width()
+        video_h = pixmap.height()
+
+        if video_w <= 0 or video_h <= 0:
             return
 
-        scene_rect = self._scene.sceneRect()
-        if scene_rect.isNull():
-            return
+        # Current zoom factor (GraphicsView may track this on _scale)
+        scale = getattr(self.view, "_scale", 1.0)
+        if scale <= 0:
+            scale = 1.0
 
-        view = self.view
+        logical_w = int(video_w * scale)
+        logical_h = int(video_h * scale)
 
-        # Map scene rect through current transform -> respects current zoom
-        view_poly = view.mapFromScene(scene_rect)
-        view_rect = view_poly.boundingRect()
-        video_w = max(1, view_rect.width())
-        video_h = max(1, view_rect.height())
-
-        # --- size of camera widget (client) we need ---
-
+        # Size of the camera widget vs the view area
         widget_size = self.size()
-        view_size = view.size()
+        view_size = self.view.size()
 
-        # Overhead inside the camera widget (toolbars, margins, etc.)
         overhead_w = widget_size.width() - view_size.width()
         overhead_h = widget_size.height() - view_size.height()
 
-        desired_widget_w = video_w + overhead_w
-        desired_widget_h = video_h + overhead_h
+        desired_widget_w = logical_w + overhead_w
+        desired_widget_h = logical_h + overhead_h
 
-        # --- locate our QMdiSubWindow container ---
-
-        sub = getattr(self, "_subwindow", None)
+        # Find the QMdiSubWindow container, if any
+        sub = _find_mdi_subwindow(self)
         if sub is None:
-            # Fallback: walk up parents until we find a QMdiSubWindow
-            p = self.parentWidget()
-            while p is not None and not isinstance(p, QtWidgets.QMdiSubWindow):
-                p = p.parentWidget()
-            if isinstance(p, QtWidgets.QMdiSubWindow):
-                self._subwindow = sub = p
-
-        # If we still don't have a subwindow, resize just this widget
-        if not isinstance(sub, QtWidgets.QMdiSubWindow):
+            # Not in MDI, resize the widget itself
             self.resize(desired_widget_w, desired_widget_h)
-            self._update_scrollbars()
+            QtCore.QTimer.singleShot(0, self._update_scrollbars)
             return
 
-        # --- add subwindow frame overhead (title bar + frame) ---
-
+        # Include the subwindow frame/border overhead so the outer window
+        # actually fits the child widget size we just computed.
         sub_size = sub.size()
-        sub_client_size = widget_size  # our widget is the client area
+        frame_w = sub_size.width() - widget_size.width()
+        frame_h = sub_size.height() - widget_size.height()
 
-        sub_over_w = sub_size.width() - sub_client_size.width()
-        sub_over_h = sub_size.height() - sub_client_size.height()
+        geom = sub.geometry()
+        geom.setWidth(desired_widget_w + frame_w)
+        geom.setHeight(desired_widget_h + frame_h)
+        sub.setGeometry(geom)
 
-        desired_sub_w = desired_widget_w + sub_over_w
-        desired_sub_h = desired_widget_h + sub_over_h
-
-        # Finally resize the QMdiSubWindow itself
-        sub.resize(desired_sub_w, desired_sub_h)
-
-        # Now that sizes are correct, adjust scrollbars
-        self._update_scrollbars()
+        QtCore.QTimer.singleShot(0, self._update_scrollbars)
 
     def _on_lock_toggled(self, checked: bool) -> None:
         """
+        Lock/unlock the camera subwindow.
+
         When locked:
-          - Disable all controls/menus within the subwindow.
-          - Prevent the QMdiSubWindow from being moved by the user.
+          - Disable controls/menus.
+          - Prevent the QMdiSubWindow from being moved/resized.
         """
         self._locked = bool(checked)
 
-        # Locate the QMdiSubWindow container once we need it
         if getattr(self, "_subwindow", None) is None:
-            w = self.window()
-            if isinstance(w, QtWidgets.QMdiSubWindow):
+            w = _find_mdi_subwindow(self)
+            if w is not None:
                 self._subwindow = w
                 self._subwindow.installEventFilter(self)
 
-        # Remember geometry when locking
-        if self._subwindow is not None and self._locked:
-            self._locked_geometry = self._subwindow.geometry()
+        if self._subwindow is not None:
+            if self._locked:
+                self._locked_geometry = self._subwindow.geometry()
+            else:
+                self._locked_geometry = QtCore.QRect()
 
         self._update_lock_state()
 
@@ -114,18 +111,17 @@ def attach_view_handlers(cls) -> None:
         """Enable/disable all interactive controls according to lock state."""
         locked = bool(getattr(self, "_locked", False))
 
-        # These controls are disabled when locked
+        # Toolbar buttons
         for btn in (
             getattr(self, "btn_rec", None),
             getattr(self, "btn_snap", None),
-            getattr(self, "btn_fit", None),
-            getattr(self, "btn_100", None),
-            getattr(self, "btn_fit_window", None),
             getattr(self, "btn_overlay_menu", None),
             getattr(self, "btn_ai_menu", None),
+            getattr(self, "btn_view_menu", None),
         ):
             if btn is not None:
                 btn.setEnabled(not locked)
+
 
         # AI + overlay menu actions
         for act in (
@@ -141,100 +137,83 @@ def attach_view_handlers(cls) -> None:
 
     def _update_scrollbars(self) -> None:
         """
-        Hide scrollbars when the view exactly fits the scaled video.
-        Enable them only when required.
+        Hide scrollbars when the view fully contains the scene rect.
+
+        If the content is larger than the viewport at the current zoom,
+        scrollbars are enabled as needed.
         """
-        if not hasattr(self, "view"):
+        view: QtWidgets.QGraphicsView = self.view
+        view.setHorizontalScrollBarPolicy(
+            QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        view.setVerticalScrollBarPolicy(
+            QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+
+        if self._pixmap_item.pixmap().isNull():
             return
 
-        view = self.view
-        pixmap = self._pixmap_item.pixmap()
-        if pixmap.isNull():
-            return
-
+        visible_rect = view.mapToScene(view.viewport().rect()).boundingRect()
         scene_rect = self._scene.sceneRect()
-        if scene_rect.isNull():
-            return
 
-        # Size actually needed to display the scaled pixmap
-        mapped = view.mapFromScene(scene_rect).boundingRect()
-        needed_w = mapped.width()
-        needed_h = mapped.height()
-
-        # Actual viewport size we have
-        vp = view.viewport().size()
-        vp_w = vp.width()
-        vp_h = vp.height()
-
-        # If video fits inside viewport, scrollbars OFF.
-        # If video exceeds viewport, scrollbars ON.
-        if needed_w <= vp_w:
+        if visible_rect.contains(scene_rect):
             view.setHorizontalScrollBarPolicy(
                 QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff
             )
-        else:
-            view.setHorizontalScrollBarPolicy(
-                QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded
-            )
-
-        if needed_h <= vp_h:
             view.setVerticalScrollBarPolicy(
                 QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff
             )
-        else:
-            view.setVerticalScrollBarPolicy(
-                QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded
-            )
 
-    def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:  # type: ignore[override]
+    def eventFilter(
+        self, obj: QtCore.QObject, event: QtCore.QEvent
+    ) -> bool:  # type: ignore[override]
         """
-        Prevent the QMdiSubWindow from moving while locked.
-
-        We restore the stored geometry whenever a Move/Resize event occurs
-        on the subwindow.
+        Prevent moving/resizing the subwindow while locked.
         """
-        sub = getattr(self, "_subwindow", None)
-        if (
-            obj is sub
-            and bool(getattr(self, "_locked", False))
-            and getattr(self, "_locked_geometry", None) is not None
-            and self._locked_geometry.isValid()
+        if obj is getattr(self, "_subwindow", None) and getattr(
+            self, "_locked", False
         ):
-            et = event.type()
-            if et in (QtCore.QEvent.Type.Move, QtCore.QEvent.Type.Resize):
-                # Restore geometry on the next turn of the event loop
-                def _restore(g=self._locked_geometry, w=sub):
-                    if w is not None:
-                        w.setGeometry(g)
-
-                QtCore.QTimer.singleShot(0, _restore)
+            if event.type() in (
+                QtCore.QEvent.Type.Move,
+                QtCore.QEvent.Type.Resize,
+            ):
+                if (
+                    getattr(self, "_locked_geometry", None)
+                    and not self._locked_geometry.isNull()
+                ):
+                    self._subwindow.setGeometry(self._locked_geometry)
                 return True
 
-        # Call base implementation with correct signature
+        # Fall back to QWidget's eventFilter
         return QtWidgets.QWidget.eventFilter(self, obj, event)
 
-    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
+    def resizeEvent(
+        self, event: QtGui.QResizeEvent
+    ) -> None:  # type: ignore[override]
         """
-        Keep scrollbars in sync whenever the camera widget is resized.
-
-        This is important so that:
-          - After 'fit window to video', scrollbars are off.
-          - When user later shrinks the window, scrollbars come back as needed.
+        After any resize, update scrollbars to reflect whether they are needed.
         """
         QtWidgets.QWidget.resizeEvent(self, event)
-        self._update_scrollbars()
+        QtCore.QTimer.singleShot(0, self._update_scrollbars)
 
     def fit_to_window(self) -> None:
-        """Scale the view so the whole scene fits inside the view."""
+        """
+        Fit the video into the view so the entire scene is visible.
+        """
+        if self._scene is None:
+            return
         self.view.fitInView(
             self._scene.sceneRect(),
             QtCore.Qt.AspectRatioMode.KeepAspectRatio,
         )
+        # Reset our logical scale tracking
         self.view._scale = 1.0
         self._update_scrollbars()
 
     def zoom_100(self) -> None:
-        """Reset zoom to 100% and update scrollbars."""
+        """
+        Reset zoom to 100% and update scrollbars.
+        """
         self.view.resetTransform()
         self.view._scale = 1.0
         self._update_scrollbars()
