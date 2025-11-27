@@ -16,7 +16,10 @@ from UI.overlays import OverlayFlags
 
 def init_camera_widget(self) -> None:
     """Build per-camera UI, backend helpers and signal wiring."""
+
+    # ------------------------------------------------------------------
     # Scene + view
+    # ------------------------------------------------------------------
     self._scene = QtWidgets.QGraphicsScene(self)
     self._pixmap_item = QtWidgets.QGraphicsPixmapItem()
     self._scene.addItem(self._pixmap_item)
@@ -25,13 +28,27 @@ def init_camera_widget(self) -> None:
     root_layout = QtWidgets.QVBoxLayout(self)
     root_layout.setContentsMargins(0, 0, 0, 0)
 
+    # ------------------------------------------------------------------
     # Toolbar
+    # ------------------------------------------------------------------
     tb = QtWidgets.QHBoxLayout()
     self.btn_rec = QtWidgets.QPushButton("● REC")
     self.btn_snap = QtWidgets.QPushButton("Snapshot")
-    self.btn_fit = QtWidgets.QPushButton("Fit")
-    self.btn_100 = QtWidgets.QPushButton("100%")
-    self.btn_fit_window = QtWidgets.QPushButton("Fit win")
+
+    # View menu (replaces Fit / 100% / Fit win buttons)
+    self.btn_view_menu = QtWidgets.QToolButton()
+    self.btn_view_menu.setText("View")
+    self.btn_view_menu.setPopupMode(
+        QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup
+    )
+    self.menu_view = QtWidgets.QMenu(self)
+
+    # View scaling actions
+    self.act_view_fit = self.menu_view.addAction("Fit in view")
+    self.act_view_100 = self.menu_view.addAction("100% (1:1)")
+    self.act_view_fit_window = self.menu_view.addAction("Fit window to video")
+    self.btn_view_menu.setMenu(self.menu_view)
+
     self.btn_lock = QtWidgets.QToolButton()
     self.btn_lock.setText("Lock")
     self.btn_lock.setCheckable(True)
@@ -79,22 +96,22 @@ def init_camera_widget(self) -> None:
 
     self.btn_ai_menu.setMenu(self.menu_ai)
 
-    # Assemble toolbar
+    # Assemble toolbar (same order as before, but with View menu)
     tb.addWidget(self.btn_rec)
     tb.addWidget(self.btn_snap)
     tb.addSpacing(12)
     tb.addWidget(self.btn_ai_menu)
     tb.addWidget(self.btn_overlay_menu)
     tb.addStretch(1)
-    tb.addWidget(self.btn_fit)
-    tb.addWidget(self.btn_100)
-    tb.addWidget(self.btn_fit_window)
+    tb.addWidget(self.btn_view_menu)
     tb.addWidget(self.btn_lock)
 
     root_layout.addLayout(tb)
     root_layout.addWidget(self.view)
 
+    # ------------------------------------------------------------------
     # State
+    # ------------------------------------------------------------------
     self._overlays = OverlayFlags()
     self._ai_enabled = True
     self._overlay_master_updating = False
@@ -114,10 +131,10 @@ def init_camera_widget(self) -> None:
         pre_ms=self.app_cfg.prebuffer_ms,
     )
 
-    # Presence logging bus (per camera) – same as original
+    # Presence logging bus (per camera)
     self._presence = PresenceBus(self.cam_cfg.name, self.app_cfg.logs_dir)
 
-    # Detector thread – same construction as before
+    # Detector thread – use app-level settings (as in original)
     det_cfg = DetectorConfig.from_app(self.app_cfg)
     self._detector = DetectorThread(det_cfg, self.cam_cfg.name)
     self._detector.resultsReady.connect(self._on_detections)
@@ -125,7 +142,7 @@ def init_camera_widget(self) -> None:
     # Stream capture backend
     self._capture = StreamCapture(self.cam_cfg)
 
-    # Poll frames from StreamCapture – keep previous cadence
+    # Poll frames from StreamCapture – same cadence as before
     self._frame_timer = QtCore.QTimer(self)
     self._frame_timer.setInterval(
         getattr(self.app_cfg, "detect_interval_ms", 30)
@@ -136,13 +153,18 @@ def init_camera_widget(self) -> None:
     self._subwindow = None
     self._locked_geometry = QtCore.QRect()
 
+    # ------------------------------------------------------------------
     # Wiring
+    # ------------------------------------------------------------------
     self._frame_timer.timeout.connect(self._poll_frame)
     self.btn_rec.clicked.connect(self._toggle_recording)
     self.btn_snap.clicked.connect(self._snapshot)
-    self.btn_fit.clicked.connect(self.fit_to_window)
-    self.btn_100.clicked.connect(self.zoom_100)
-    self.btn_fit_window.clicked.connect(self.fit_window_to_video)
+
+    # View menu actions -> view helpers (provided by camera_widget_view.py)
+    self.act_view_fit.triggered.connect(self.fit_to_window)
+    self.act_view_100.triggered.connect(self.zoom_100)
+    self.act_view_fit_window.triggered.connect(self.fit_window_to_video)
+
     self.btn_lock.toggled.connect(self._on_lock_toggled)
 
     # AI + overlay menu actions
