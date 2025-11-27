@@ -2992,3 +2992,7 @@
 {"ts": 627554638, "camera": "cam1", "event": "enter", "type": "person"}
 {"ts": 627557286, "camera": "cam1", "event": "exit", "type": "person"}
 {"ts": 627557599, "camera": "cam1", "event": "enter", "type": "person"}
+{"ts": 628197189, "camera": "cam1", "event": "enter", "type": "person"}
+{"ts": 628486832, "camera": "cam1", "event": "enter", "type": "person"}
+{"ts": 630118551, "camera": "cam1", "event": "enter", "type": "person"}
+{"ts": 630134943, "camera": "cam1", "event": "enter", "type": "person"}
