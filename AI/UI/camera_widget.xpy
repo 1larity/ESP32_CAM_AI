@@ -14,7 +14,7 @@ from recorder import PrebufferRecorder
 from presence import PresenceBus
 from utils import qimage_from_bgr
 from stream import StreamCapture
-from enrollment_service import EnrollmentService
+from enrollment import EnrollmentService
 from UI.graphics_view import GraphicsView
 from UI.overlays import OverlayFlags, draw_overlays
 

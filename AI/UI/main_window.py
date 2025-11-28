@@ -1,20 +1,17 @@
 from __future__ import annotations
-
 from typing import Optional
-
 from PyQt6 import QtCore, QtGui, QtWidgets
-
 from settings import AppSettings, CameraSettings, save_settings
 from utils import open_folder_or_warn
 from models import ModelManager
-from enrollment_service import EnrollmentService
+from enrollment import EnrollmentService
 from UI.enrollment import EnrollDialog
 from UI.image_manager import ImageManagerDialog
 from UI.events_pane import EventsPane
 from UI.discovery_dialog import DiscoveryDialog
 from UI.ip_cam_dialog import AddIpCameraDialog
 from UI.camera_widget import CameraWidget
-
+from enrollment import get_enrollment_service
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, app_cfg: AppSettings):
@@ -237,7 +234,7 @@ class MainWindow(QtWidgets.QMainWindow):
     # ------------------------------------------------------------------ #
 
     def _rebuild_faces(self) -> None:
-        svc = EnrollmentService(self.app_cfg)
+        svc = get_enrollment_service()
         ok = svc.rebuild_lbph_model_from_disk()
         if ok:
             QtWidgets.QMessageBox.information(

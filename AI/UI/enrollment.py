@@ -6,7 +6,7 @@ from __future__ import annotations
 from PyQt6 import QtWidgets, QtCore
 
 from settings import AppSettings
-from enrollment_service import EnrollmentService
+from enrollment import EnrollmentService
 
 
 class EnrollDialog(QtWidgets.QDialog):
