@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import Optional
 from PyQt6 import QtCore, QtGui, QtWidgets
+
 from settings import AppSettings, CameraSettings, save_settings
 from utils import open_folder_or_warn
 from models import ModelManager
@@ -13,11 +14,13 @@ from UI.ip_cam_dialog import AddIpCameraDialog
 from UI.camera_widget import CameraWidget
 from enrollment import get_enrollment_service
 
+
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, app_cfg: AppSettings):
         super().__init__()
         self.app_cfg = app_cfg
 
+        # MDI area
         self.mdi = QtWidgets.QMdiArea()
         self.mdi.setHorizontalScrollBarPolicy(
             QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded
@@ -50,6 +53,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _add_camera_window(self, cam_cfg: CameraSettings) -> None:
         w = CameraWidget(cam_cfg, self.app_cfg, self)
+
         sub = QtWidgets.QMdiSubWindow()
         sub.setWidget(w)
         sub.setWindowTitle(cam_cfg.name)
@@ -144,10 +148,14 @@ class MainWindow(QtWidgets.QMainWindow):
     def _open_enrollment(self) -> None:
         dlg = EnrollDialog(self.app_cfg, self)
         dlg.exec()
+        # After enrollment, rebuild LBPH model from disk (silent)
+        self._rebuild_faces_silent()
 
     def _open_image_manager(self) -> None:
         dlg = ImageManagerDialog(self.app_cfg, self)
         dlg.exec()
+        # After image management changes, rebuild LBPH model from disk (silent)
+        self._rebuild_faces_silent()
 
     def _open_discovery(self) -> None:
         dlg = DiscoveryDialog(self.app_cfg, self)
@@ -188,15 +196,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # Tools
         m_tools = menubar.addMenu("Tools")
-        m_tools.addAction("Open config folder").triggered.connect(
-            lambda: open_folder_or_warn(self, self.app_cfg.settings_dir)
-        )
-        m_tools.addAction("Open data folder").triggered.connect(
-            lambda: open_folder_or_warn(self, self.app_cfg.data_dir)
-        )
-        m_tools.addAction("Open models folder").triggered.connect(
-            lambda: open_folder_or_warn(self, self.app_cfg.models_dir)
-        )
+        # NOTE: per request, removed: Open config/data/models folder
         m_tools.addAction("Open recordings folder").triggered.connect(
             lambda: open_folder_or_warn(self, self.app_cfg.output_dir)
         )
@@ -223,7 +223,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.mdi.cascadeSubWindows
         )
         m_view.addSeparator()
-        m_view.addAction("Fit All").triggered.connect(self._fit_all)
+        m_view.addAction("Fit All to Window").triggered.connect(self._fit_all)
         m_view.addAction("100% All").triggered.connect(self._100_all)
         m_view.addAction("Resize windows to video size").triggered.connect(
             self._resize_all_to_video
@@ -233,9 +233,20 @@ class MainWindow(QtWidgets.QMainWindow):
     # face model rebuild
     # ------------------------------------------------------------------ #
 
-    def _rebuild_faces(self) -> None:
+    def _rebuild_faces_silent(self) -> bool:
+        """
+        Rebuild LBPH face model from the images on disk, without
+        displaying any UI messages. Returns True if a model was built.
+        """
         svc = get_enrollment_service()
-        ok = svc.rebuild_lbph_model_from_disk()
+        return svc.rebuild_lbph_model_from_disk()
+
+    def _rebuild_faces(self) -> None:
+        """
+        Rebuild LBPH face model from the images on disk and show
+        a message box with the result.
+        """
+        ok = self._rebuild_faces_silent()
         if ok:
             QtWidgets.QMessageBox.information(
                 self,
