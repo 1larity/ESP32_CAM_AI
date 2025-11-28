@@ -9,7 +9,7 @@ from detectors import DetectorThread, DetectorConfig
 from recorder import PrebufferRecorder
 from presence import PresenceBus
 from stream import StreamCapture
-from enrollment_service import EnrollmentService
+from enrollment import EnrollmentService
 from UI.graphics_view import GraphicsView
 from UI.overlays import OverlayFlags
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Dict, List, Tuple, Optional
+from pathlib import Path
 import os
 import json
 import time
@@ -68,15 +69,17 @@ def run_faces(
         for (fx, fy, fw, fh) in faces:
             name = "face"
             score = 0.6
-            if rec is not None:
+            if rec is not None and labels:
                 try:
                     roi = gray[fy:fy + fh, fx:fx + fw]
-                    roi = cv2.resize(roi, (160, 160))
+                    roi = cv2.resize(roi, (128, 128), interpolation=cv2.INTER_AREA)
                     pred, dist = rec.predict(roi)
-                    if 0 <= pred < len(labels) and dist <= 95.0:
+                    threshold = 110.0
+                    if 0 <= pred and dist <= threshold:
                         label_name = labels.get(int(pred), "face")
                         name = label_name
-                        score = max(0.0, min(1.0, 1.0 - (dist / 95.0)))
+                        # map distance → [0.3, 1.0]
+                        score = max(0.3, min(1.0, (threshold - dist) / threshold + 0.3))
                     else:
                         name = "unknown"
                         score = 0.4
@@ -96,3 +99,56 @@ def run_faces(
 
     elapsed_ms = int((time.monotonic() - start) * 1000.0)
     return faces_out, elapsed_ms
+
+
+def train_lbph_models(face_dir: str, models_dir: str) -> bool:
+    """Scan all person folders under face_dir and train LBPH model + labels.
+
+    Models are written to models_dir / "lbph_faces.xml" and
+    models_dir / "labels_faces.json" (stored as {name: id}).
+    Returns True if training succeeded, False otherwise.
+    """
+    base = Path(face_dir)
+    if not base.exists():
+        return False
+
+    subs = [p for p in base.iterdir() if p.is_dir()]
+    imgs: List[np.ndarray] = []
+    labels_arr: List[int] = []
+    label_map: Dict[str, int] = {}
+    next_id = 0
+
+    for p in sorted(subs):
+        label_map[p.name] = next_id
+        label_id = next_id
+        next_id += 1
+
+        files: List[Path] = []
+        for pat in ("*.png", "*.PNG", "*.jpg", "*.JPG", "*.jpeg", "*.JPEG"):
+            files.extend(sorted(p.glob(pat)))
+        for f in files:
+            im = cv2.imread(str(f), cv2.IMREAD_GRAYSCALE)
+            if im is None:
+                continue
+            if im.shape != (128, 128):
+                im = cv2.resize(im, (128, 128), interpolation=cv2.INTER_AREA)
+            imgs.append(im)
+            labels_arr.append(label_id)
+
+    if not imgs:
+        return False
+
+    try:
+        rec = cv2.face.LBPHFaceRecognizer_create(
+            radius=1, neighbors=8, grid_x=8, grid_y=8
+        )  # type: ignore[attr-defined]
+    except Exception:
+        return False
+
+    rec.train(imgs, np.array(labels_arr))
+    models_path = Path(models_dir)
+    models_path.mkdir(parents=True, exist_ok=True)
+    rec.write(str(models_path / "lbph_faces.xml"))
+    with open(models_path / "labels_faces.json", "w", encoding="utf-8") as fp:
+        json.dump(label_map, fp, indent=2)
+    return True

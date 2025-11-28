@@ -9,7 +9,7 @@ import time
 from PyQt6 import QtCore, QtGui
 
 from detectors import DetectionPacket
-from enrollment_service import EnrollmentService
+from enrollment import EnrollmentService
 from utils import qimage_from_bgr
 from UI.overlays import draw_overlays
 
