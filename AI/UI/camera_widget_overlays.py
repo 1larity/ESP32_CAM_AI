@@ -1,4 +1,4 @@
-# Camera_widget_overlays.py
+# camera_widget_overlays.py
 # AI / overlay toggle helpers.
 
 from __future__ import annotations
@@ -63,6 +63,10 @@ def attach_overlay_handlers(cls) -> None:
         """Toggle HUD (camera name + date/timestamp)."""
         self._overlays.hud = bool(checked)
 
+    def _on_overlay_stats_toggled(self, checked: bool) -> None:
+        """Toggle bottom-left stats overlay (FPS + counts)."""
+        self._overlays.stats = bool(checked)
+
     # Bind helpers
     cls._on_ai_toggled = _on_ai_toggled
     cls._on_ai_yolo_toggled = _on_ai_yolo_toggled
@@ -71,3 +75,4 @@ def attach_overlay_handlers(cls) -> None:
     cls._sync_overlay_master = _sync_overlay_master
     cls._on_overlay_master_toggled = _on_overlay_master_toggled
     cls._on_overlay_hud_toggled = _on_overlay_hud_toggled
+    cls._on_overlay_stats_toggled = _on_overlay_stats_toggled

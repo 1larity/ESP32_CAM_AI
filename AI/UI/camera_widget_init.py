@@ -68,6 +68,9 @@ def init_camera_widget(self) -> None:
     self.act_overlay_hud = self.menu_overlays.addAction("HUD (cam + time)")
     self.act_overlay_hud.setCheckable(True)
     self.act_overlay_hud.setChecked(True)
+    self.act_overlay_stats = self.menu_overlays.addAction("Stats (FPS + counts)")
+    self.act_overlay_stats.setCheckable(True)
+    self.act_overlay_stats.setChecked(True)
     self.btn_overlay_menu.setMenu(self.menu_overlays)
 
     # AI menu
@@ -156,7 +159,10 @@ def init_camera_widget(self) -> None:
     # ------------------------------------------------------------------
     # Wiring
     # ------------------------------------------------------------------
+    # Frame polling
     self._frame_timer.timeout.connect(self._poll_frame)
+
+    # Recording / snapshot
     self.btn_rec.clicked.connect(self._toggle_recording)
     self.btn_snap.clicked.connect(self._snapshot)
 
@@ -165,6 +171,7 @@ def init_camera_widget(self) -> None:
     self.act_view_100.triggered.connect(self.zoom_100)
     self.act_view_fit_window.triggered.connect(self.fit_window_to_video)
 
+    # Lock
     self.btn_lock.toggled.connect(self._on_lock_toggled)
 
     # AI + overlay menu actions
@@ -174,6 +181,7 @@ def init_camera_widget(self) -> None:
     self.act_ai_pets.toggled.connect(self._on_ai_pets_toggled)
     self.act_overlay_detections.toggled.connect(self._on_overlay_master_toggled)
     self.act_overlay_hud.toggled.connect(self._on_overlay_hud_toggled)
+    self.act_overlay_stats.toggled.connect(self._on_overlay_stats_toggled)
 
     # Enrollment service – singleton
     self._enrollment = EnrollmentService.instance()
@@ -186,3 +194,4 @@ def init_camera_widget(self) -> None:
     self._overlays.yolo = True
     self._overlays.faces = True
     self._overlays.pets = True
+    self._overlays.stats = True

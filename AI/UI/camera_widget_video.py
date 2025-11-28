@@ -12,10 +12,11 @@ from detectors import DetectionPacket
 from enrollment import EnrollmentService
 from utils import qimage_from_bgr
 from UI.overlays import draw_overlays
+from UI.overlay_stats import FpsCounter, compute_yolo_stats, YoloStats
 
 
 def attach_video_handlers(cls) -> None:
-    """Inject frame / recorder / overlay handlers into CameraWidget."""
+    """Inject frame / detector / overlay / HUD helpers into CameraWidget."""
 
     # ------------------------------------------------------------------ frame / detector / recorder
 
@@ -45,13 +46,25 @@ def attach_video_handlers(cls) -> None:
         self._update_pixmap(frame, pkt_for_frame)
 
     def _update_pixmap(self, bgr, pkt: Optional[DetectionPacket]) -> None:
+        # Update FPS + YOLO stats on each frame, but only if stats overlay enabled.
+        fps: Optional[float] = None
+        stats: Optional[YoloStats] = None
+        if getattr(self._overlays, "stats", False) and getattr(self, "_ai_enabled", False):
+            if not hasattr(self, "_fps_counter"):
+                self._fps_counter = FpsCounter()
+            fps = self._fps_counter.update()
+            boxes = []
+            if pkt is not None:
+                boxes.extend(getattr(pkt, "faces", []) or [])
+                boxes.extend(getattr(pkt, "pets", []) or [])
+            stats = compute_yolo_stats(boxes)
+
         qimg = qimage_from_bgr(bgr)
         pixmap = QtGui.QPixmap.fromImage(qimg)
 
-        # always paint; detections depend on AI, HUD does not
         painter = QtGui.QPainter(pixmap)
         try:
-            # Detection boxes/labels only if:
+            # Detection overlays only if:
             # - we have a packet
             # - AI is enabled
             # - at least one detection overlay type is active
@@ -72,6 +85,10 @@ def attach_video_handlers(cls) -> None:
             # HUD (camera name + date/time) is independent of AI on/off
             if getattr(self._overlays, "hud", False):
                 self._draw_hud(painter)
+
+            # Bottom-left stats overlay (same font as HUD)
+            if fps is not None and stats is not None and getattr(self._overlays, "stats", False):
+                self._draw_stats_line(painter, fps, stats, pixmap.width(), pixmap.height())
         finally:
             painter.end()
 
@@ -115,24 +132,63 @@ def attach_video_handlers(cls) -> None:
         margin = 6
         p.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255)))
         font = p.font()
+        # Use a readable size for HUD; stats will reuse this font.
         font.setPointSize(max(font.pointSize(), 9))
         p.setFont(font)
 
-        # Simple text background
-        metrics = QtGui.QFontMetrics(font)
-        w = metrics.horizontalAdvance(text) + margin * 2
-        h = metrics.height() + margin * 2
-        rect = QtCore.QRect(margin, margin, w, h)
+        fm = QtGui.QFontMetrics(font)
+        rect = fm.boundingRect(text)
+        rect = QtCore.QRectF(
+            margin,
+            margin,
+            rect.width() + 8,
+            rect.height() + 4,
+        )
 
+        # Background
         bg = QtGui.QColor(0, 0, 0, 128)
         p.fillRect(rect, bg)
+
+        # Text
         p.drawText(
-            rect.adjusted(margin, margin // 2, -margin, 0),
-            QtCore.Qt.AlignmentFlag.AlignVCenter | QtCore.Qt.AlignmentFlag.AlignLeft,
+            rect.adjusted(4, 0, -4, 0),
+            QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter,
             text,
         )
 
-    # ------------------------------------------------------------------ recording / snapshot helpers
+    def _draw_stats_line(
+        self, p: QtGui.QPainter, fps: float, stats: YoloStats, width: int, height: int
+    ) -> None:
+        """Draw a single-line stats overlay in the bottom-left corner.  
+        Font size matches the current painter font (same as HUD)."""
+        margin = 6
+        text = (
+            f"FPS: {fps:4.1f} | "
+            f"faces: {stats.faces} ({stats.known_faces} known) | "
+            f"pets: {stats.pets} | total: {stats.total}"
+        )
+        font = p.font()
+        fm = QtGui.QFontMetrics(font)
+        text_width = fm.horizontalAdvance(text)
+        text_height = fm.height()
+        x = margin
+        y = height - margin
+        rect = QtCore.QRectF(
+            x - 4,
+            y - text_height - 2,
+            text_width + 8,
+            text_height + 4,
+        )
+        # Background for readability
+        bg = QtGui.QColor(0, 0, 0, 128)
+        p.fillRect(rect, bg)
+        p.setPen(QtGui.QColor(255, 255, 255))
+        p.drawText(
+            rect.adjusted(4, 0, -4, 0),
+            QtCore.Qt.AlignmentFlag.AlignLeft
+            | QtCore.Qt.AlignmentFlag.AlignVCenter,
+            text,
+        )
 
     def _snapshot(self) -> None:
         if self._last_bgr is None:
@@ -159,5 +215,6 @@ def attach_video_handlers(cls) -> None:
     cls._update_pixmap = _update_pixmap
     cls._on_detections = _on_detections
     cls._draw_hud = _draw_hud
+    cls._draw_stats_line = _draw_stats_line
     cls._snapshot = _snapshot
     cls._toggle_recording = _toggle_recording
