@@ -15,10 +15,28 @@ from UI.camera_widget import CameraWidget
 from enrollment import get_enrollment_service
 
 
+class _FaceRebuildWorker(QtCore.QObject):
+    """
+    Runs the LBPH model rebuild in a background thread.
+    """
+    finished = QtCore.pyqtSignal(bool)
+
+    @QtCore.pyqtSlot()
+    def run(self) -> None:
+        svc = get_enrollment_service()
+        ok = svc.rebuild_lbph_model_from_disk()
+        self.finished.emit(ok)
+
+
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, app_cfg: AppSettings):
         super().__init__()
         self.app_cfg = app_cfg
+
+        # Background face rebuild state
+        self._face_rebuild_thread: Optional[QtCore.QThread] = None
+        self._face_rebuild_worker: Optional[_FaceRebuildWorker] = None
+        self._face_rebuild_dialog: Optional[QtWidgets.QProgressDialog] = None
 
         # MDI area
         self.mdi = QtWidgets.QMdiArea()
@@ -148,14 +166,14 @@ class MainWindow(QtWidgets.QMainWindow):
     def _open_enrollment(self) -> None:
         dlg = EnrollDialog(self.app_cfg, self)
         dlg.exec()
-        # After enrollment, rebuild LBPH model from disk (silent)
-        self._rebuild_faces_silent()
+        # After enrollment, rebuild LBPH model from disk with progress
+        self._start_face_rebuild("Rebuilding face model after enrollment")
 
     def _open_image_manager(self) -> None:
         dlg = ImageManagerDialog(self.app_cfg, self)
         dlg.exec()
-        # After image management changes, rebuild LBPH model from disk (silent)
-        self._rebuild_faces_silent()
+        # After image management changes, rebuild LBPH model from disk with progress
+        self._start_face_rebuild("Rebuilding face model after image changes")
 
     def _open_discovery(self) -> None:
         dlg = DiscoveryDialog(self.app_cfg, self)
@@ -196,7 +214,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # Tools
         m_tools = menubar.addMenu("Tools")
-        # NOTE: per request, removed: Open config/data/models folder
+        # Per request, removed: Open config/data/models folder
         m_tools.addAction("Open recordings folder").triggered.connect(
             lambda: open_folder_or_warn(self, self.app_cfg.output_dir)
         )
@@ -208,7 +226,9 @@ class MainWindow(QtWidgets.QMainWindow):
             lambda: ModelManager.fetch_defaults(self, self.app_cfg)
         )
         act_rebuild_faces = QtGui.QAction("Rebuild face model from disk…", self)
-        act_rebuild_faces.triggered.connect(self._rebuild_faces)
+        act_rebuild_faces.triggered.connect(
+            lambda: self._start_face_rebuild("Rebuild Face Model")
+        )
         m_tools.addAction(act_rebuild_faces)
 
         # View
@@ -230,23 +250,61 @@ class MainWindow(QtWidgets.QMainWindow):
         )
 
     # ------------------------------------------------------------------ #
-    # face model rebuild
+    # face model rebuild with progress
     # ------------------------------------------------------------------ #
 
-    def _rebuild_faces_silent(self) -> bool:
+    def _start_face_rebuild(self, title: str) -> None:
         """
-        Rebuild LBPH face model from the images on disk, without
-        displaying any UI messages. Returns True if a model was built.
+        Start a background LBPH face model rebuild and show a modal
+        progress dialog so the user can see that work is happening.
         """
-        svc = get_enrollment_service()
-        return svc.rebuild_lbph_model_from_disk()
+        # Avoid re-entrancy; if a rebuild is already in progress, ignore.
+        if self._face_rebuild_thread is not None:
+            return
 
-    def _rebuild_faces(self) -> None:
+        # Progress dialog (indeterminate)
+        dlg = QtWidgets.QProgressDialog(
+            "Rebuilding face model from disk…", None, 0, 0, self
+        )
+        dlg.setWindowTitle(title)
+        dlg.setWindowModality(QtCore.Qt.WindowModality.ApplicationModal)
+        dlg.setCancelButton(None)
+        dlg.setMinimumDuration(0)
+        dlg.setAutoClose(False)
+        dlg.setAutoReset(False)
+        dlg.show()
+
+        self._face_rebuild_dialog = dlg
+
+        # Background thread + worker
+        thread = QtCore.QThread(self)
+        worker = _FaceRebuildWorker()
+        worker.moveToThread(thread)
+
+        worker.finished.connect(self._on_face_rebuild_finished)
+        worker.finished.connect(thread.quit)
+        thread.finished.connect(thread.deleteLater)
+        thread.started.connect(worker.run)
+
+        self._face_rebuild_thread = thread
+        self._face_rebuild_worker = worker
+
+        thread.start()
+
+    def _on_face_rebuild_finished(self, ok: bool) -> None:
         """
-        Rebuild LBPH face model from the images on disk and show
-        a message box with the result.
+        Invoked in the GUI thread when the background rebuild finishes.
         """
-        ok = self._rebuild_faces_silent()
+        # Close the progress dialog
+        if self._face_rebuild_dialog is not None:
+            self._face_rebuild_dialog.close()
+            self._face_rebuild_dialog = None
+
+        # Clean up worker/thread handles
+        self._face_rebuild_worker = None
+        self._face_rebuild_thread = None
+
+        # Inform the user of the result
         if ok:
             QtWidgets.QMessageBox.information(
                 self,
