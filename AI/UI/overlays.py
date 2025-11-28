@@ -18,7 +18,7 @@ class OverlayFlags:
     pets: bool = True
     tracks: bool = True
     hud: bool = True  # camera name + timestamp HUD
-
+    stats: bool = True  # FPS + detection counts (bottom-left)
 
 def _pen(width: int, rgb: Tuple[int, int, int]) -> QtGui.QPen:
     pen = QtGui.QPen(QtGui.QColor(*rgb))
