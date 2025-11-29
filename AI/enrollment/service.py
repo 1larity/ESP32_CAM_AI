@@ -5,10 +5,11 @@ from __future__ import annotations
 
 from pathlib import Path
 import time
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any
 
 import numpy as np
-from PyQt6 import QtCore
+from PySide6 import QtCore
+from PySide6.QtCore import Signal
 
 from settings import BASE_DIR
 from detection.lbph import train_lbph_models
@@ -16,80 +17,166 @@ from .capture import capture_enrollment_sample
 
 
 class EnrollmentService(QtCore.QObject):
-    """Collect face crops for one person and train LBPH models."""
+    """
+    Collect face crops for one person and train LBPH models.
+
+    The typical call flow is:
+
+      1. UI calls start(name, total_samples, target_cam)
+      2. Video / detection layer calls on_detections(cam_name, bgr, pkt)
+         for every DetectionPacket.
+      3. Service saves cropped face ROIs into data/faces/<name>/...
+      4. When enough samples are collected, it triggers LBPH training.
+
+    Status updates are emitted via the `status_changed` signal as dicts with keys:
+      - active: bool
+      - target_name: str
+      - samples_needed: int
+      - samples_got: int
+      - existing_count: int   (images already on disk for this person)
+      - done: bool
+      - last_error: Optional[str]
+    """
 
     _inst: Optional["EnrollmentService"] = None
-    status_changed = QtCore.pyqtSignal(dict)
+    status_changed = Signal(dict)
+
+    # ------------------------------------------------------------------ lifecycle / state
 
     def __init__(self) -> None:
         super().__init__()
+
+        # Where face crops and models are stored
         self.face_dir: Path = BASE_DIR / "data" / "faces"
         self.models_dir: Path = BASE_DIR / "models"
         self.face_dir.mkdir(parents=True, exist_ok=True)
         self.models_dir.mkdir(parents=True, exist_ok=True)
 
+        # Enrollment state
         self.active: bool = False
         self.target_name: str = ""
         self.samples_needed: int = 0
         self.samples_got: int = 0
+
+        # Sampling debounce / last-saved frame
         self._last_save_ms: int = 0
         self._last_gray: Optional[np.ndarray] = None
-        self.target_cam: Optional[str] = None  # if not None, only this camera is used
-        self._existing_count: int = 0  # how many images already on disk for this person
-    # ------------------------------------------------------------------ helper probably overkill
-    def rebuild_lbph_model_from_disk(self) -> bool:
-        """Rebuild LBPH models from all face images on disk."""
-        return train_lbph_models(str(self.face_dir), str(self.models_dir))
 
-    # ------------------------------------------------------------------ Singleton
+        # Optional camera filter (only sample from this camera if set)
+        self.target_cam: Optional[str] = None
+
+        # Number of images already on disk when enrollment started
+        self._existing_count: int = 0
+
+    # ------------------------------------------------------------------ singleton access
 
     @classmethod
     def instance(cls) -> "EnrollmentService":
         if cls._inst is None:
-            cls._inst = EnrollmentService()
+            cls._inst = cls()
         return cls._inst
 
-    # ------------------------------------------------------------------ Public API
+    # ------------------------------------------------------------------ status dispatch
 
-    def start(self, name: str, n: int, cam_name: Optional[str] = None) -> None:
-        """Start an enrollment session collecting *n* samples for *name*."""
+    def _emit_status(self, **kwargs: Any) -> None:
+        """
+        Helper to emit a status dict.
+
+        Base payload:
+          active, target_name, samples_needed, samples_got, existing_count, done, last_error
+        Extra keys may be merged in via kwargs.
+        """
+        data: Dict[str, Any] = {
+            "active": self.active,
+            "target_name": self.target_name,
+            "samples_needed": self.samples_needed,
+            "samples_got": self.samples_got,
+            "existing_count": self._existing_count,
+            "done": self.samples_got >= self.samples_needed and self.samples_needed > 0,
+            "last_error": None,
+        }
+        data.update(kwargs)
+        self.status_changed.emit(data)
+
+    # ------------------------------------------------------------------ public API (control)
+
+    def start(
+        self,
+        name: str,
+        total_samples: int,
+        target_cam: Optional[str] = None,
+    ) -> None:
+        """
+        Begin an enrollment session.
+
+        name:
+          Person / label name. Must be non-empty.
+        total_samples:
+          Number of samples to capture in this session.
+        target_cam:
+          If not None, only frames from this camera name will be accepted.
+        """
+        # Stop any existing session
+        self.stop()
+
         self.target_name = name.strip()
         if not self.target_name:
+            self._emit_status(last_error="Name is empty")
             return
 
-        self.target_cam = cam_name or None
-
-        person_dir = self.face_dir / self.target_name
-        person_dir.mkdir(parents=True, exist_ok=True)
-
-        # Count existing images so we don't overwrite them,
-        # but DO NOT count them towards this session's target.
-        existing: List[Path] = []
-        for pat in ("*.png", "*.PNG", "*.jpg", "*.JPG", "*.jpeg", "*.JPEG"):
-            existing.extend(person_dir.glob(pat))
-        self._existing_count = len(existing)
-
+        self.samples_needed = max(1, int(total_samples))
         self.samples_got = 0
-        self.samples_needed = max(1, int(n))
         self._last_save_ms = 0
         self._last_gray = None
+        self.target_cam = target_cam
+
+        # Count any existing images so filenames continue from there
+        person_dir = self.face_dir / self.target_name
+        person_dir.mkdir(parents=True, exist_ok=True)
+        self._existing_count = len(list(person_dir.glob("*.png")))
 
         self.active = True
         self._emit_status()
 
-    def end(self) -> None:
-        """Abort the current enrollment session without training."""
-        self.active = False
-        self._emit_status()
+    def stop(self) -> None:
+        """
+        Stop enrollment without triggering training.
+
+        This is used when the user cancels / aborts enrollment.
+        """
+        if self.active:
+            self.active = False
+            self._emit_status()
+
+    # ------------------------------------------------------------------ public API (frame hook)
 
     def on_detections(self, cam_name: str, bgr: np.ndarray, pkt) -> None:
-        """Called from CameraWidget._on_detections for each detection packet."""
-        if not self.active or not self.target_name:
+        """
+        Entry point from the video layer.
+
+        Called from UI/CameraWidgetVideo for each `DetectionPacket`.
+
+        cam_name:
+          Name of the camera that produced this frame.
+        bgr:
+          BGR frame as a NumPy array.
+        pkt:
+          DetectionPacket with at least `.faces` containing DetBox objects.
+        """
+        if not self.active:
             return
 
-        now_ms = time.monotonic_ns() // 1_000_000
+        # Respect camera filter if set
+        if self.target_cam is not None and cam_name != self.target_cam:
+            return
 
-        new_last_ms, new_last_gray, saved = capture_enrollment_sample(
+        if bgr is None or pkt is None:
+            return
+
+        now_ms = int(time.time() * 1000)
+
+        # Delegate the heavy lifting (face selection, debouncing, path creation)
+        new_last_save_ms, last_gray, saved = capture_enrollment_sample(
             cam_name=cam_name,
             target_cam=self.target_cam,
             target_name=self.target_name,
@@ -102,53 +189,44 @@ class EnrollmentService(QtCore.QObject):
             last_gray=self._last_gray,
             now_ms=now_ms,
         )
+
+        # Update internal state from helper
+        self._last_save_ms = new_last_save_ms
+        self._last_gray = last_gray
+
         if not saved:
+            # Nothing new persisted for this frame
             return
 
-        self._last_save_ms = new_last_ms
-        self._last_gray = new_last_gray
+        # One more sample captured
         self.samples_got += 1
-        self._emit_status()
+        done = self.samples_got >= self.samples_needed
 
-        if self.samples_got >= self.samples_needed:
+        self._emit_status(done=done)
+
+        if done:
+            # Freeze further sampling and kick off training
             self.active = False
-            self._emit_status()
-            self._train_and_emit()
+            self._train_now()
 
-    # ------------------------------------------------------------------ Internals
+    # ------------------------------------------------------------------ training
 
-    def _emit_status(self) -> None:
-        folder = self.face_dir / self.target_name if self.target_name else self.face_dir
-        payload: Dict[str, Any] = {
-            "active": self.active,
-            "name": self.target_name,
-            "got": self.samples_got,
-            "need": self.samples_needed,
-            "folder": str(folder),
-            "done": (
-                not self.active
-                and self.samples_got >= self.samples_needed
-                and self.samples_needed > 0
-            ),
-            "cam": self.target_cam,
-        }
-        self.status_changed.emit(payload)
+    def rebuild_lbph_model_from_disk(self) -> bool:
+        """
+        Scan `self.face_dir` and train LBPH models into `self.models_dir`.
 
-    def _train_and_emit(self) -> bool:
+        This is used both after enrollment completes and when the user
+        requests a manual "rebuild from disk" via the controller.
+        """
         ok = train_lbph_models(str(self.face_dir), str(self.models_dir))
         if not ok:
-            return False
+            self._emit_status(last_error="No faces found on disk for training.")
+        else:
+            self._emit_status()
+        return ok
 
-        # Emit final "done" snapshot with folder pointing at face root
-        self.status_changed.emit(
-            {
-                "active": False,
-                "name": self.target_name,
-                "got": self.samples_got,
-                "need": self.samples_needed,
-                "folder": str(self.face_dir),
-                "done": True,
-                "cam": self.target_cam,
-            }
-        )
-        return True
+    def _train_now(self) -> None:
+        """
+        Train LBPH models from all faces on disk and update status.
+        """
+        self.rebuild_lbph_model_from_disk()

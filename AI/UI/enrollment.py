@@ -1,127 +1,111 @@
 # enrollment.py
-# Progress UI with label and progress bar, bound to EnrollmentService signals.
+# Enrollment dialog UI, talks to EnrollmentController.
 
 from __future__ import annotations
-
-from PyQt6 import QtWidgets, QtCore
-
+from typing import Optional
+from PySide6 import QtCore, QtGui, QtWidgets
+from PySide6.QtCore import Slot
+from enrollment_service import EnrollmentController
 from settings import AppSettings
-from enrollment import EnrollmentService
 
 
 class EnrollDialog(QtWidgets.QDialog):
-    """Simple UI wrapper around EnrollmentService with progress feedback."""
+    """
+    Modal dialog for face/pet enrollment.
+    """
 
-    def __init__(self, app_cfg: AppSettings, parent=None):
+    def __init__(self, app_cfg: AppSettings, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Enrollment")
-        self.svc = EnrollmentService.instance()
-        self._app_cfg = app_cfg
+        self.app_cfg = app_cfg
+        self.ctrl = EnrollmentController()
 
-        # Inputs
-        self.name = QtWidgets.QLineEdit()
+        self.setWindowTitle("Enroll faces / pets")
+        self.resize(480, 320)
 
-        self.target = QtWidgets.QSpinBox()
-        self.target.setRange(5, 400)
-        self.target.setValue(40)
+        self._build_ui()
+        self._wire_signals()
 
-        # Camera picker: Any camera + each configured camera
-        self.cam_combo = QtWidgets.QComboBox()
-        self.cam_combo.addItem("Any camera", None)
-        for cam in self._app_cfg.cameras:
-            self.cam_combo.addItem(cam.name, cam.name)
+    # ------------------------------------------------------------------ UI
 
-        self.btn_start = QtWidgets.QPushButton("Start")
-        # Sampling stops automatically; this explicitly aborts the session.
-        self.btn_abort = QtWidgets.QPushButton("Abort")
-        # Explicit close button as requested
-        self.btn_close = QtWidgets.QPushButton("Close")
+    def _build_ui(self) -> None:
+        layout = QtWidgets.QVBoxLayout(self)
 
-        self.lbl_status = QtWidgets.QLabel("Idle")
-        self.pb = QtWidgets.QProgressBar()
-        self.pb.setRange(0, 100)
-        self.pb.setValue(0)
-
-        # Layout
         form = QtWidgets.QFormLayout()
-        form.addRow("Name", self.name)
-        form.addRow("Camera", self.cam_combo)
-        form.addRow("Samples (new)", self.target)
+        self.name_edit = QtWidgets.QLineEdit(self)
+        self.samples_spin = QtWidgets.QSpinBox(self)
+        self.samples_spin.setRange(1, 500)
+        self.samples_spin.setValue(40)
 
-        btns = QtWidgets.QHBoxLayout()
-        btns.addWidget(self.btn_start)
-        btns.addWidget(self.btn_abort)
-        btns.addStretch(1)
-        btns.addWidget(self.btn_close)
+        form.addRow("Name / label", self.name_edit)
+        form.addRow("Samples this session", self.samples_spin)
+        layout.addLayout(form)
 
-        lay = QtWidgets.QVBoxLayout(self)
-        lay.addLayout(form)
-        lay.addLayout(btns)
-        lay.addWidget(self.lbl_status)
-        lay.addWidget(self.pb)
+        self.status_label = QtWidgets.QLabel(self)
+        self.status_label.setWordWrap(True)
+        layout.addWidget(self.status_label)
 
-        # Wiring
-        self.btn_start.clicked.connect(self._start)
-        self.btn_abort.clicked.connect(self._abort)
-        self.btn_close.clicked.connect(self.accept)
-        self.svc.status_changed.connect(self._on_status)
+        btn_row = QtWidgets.QHBoxLayout()
+        self.btn_start = QtWidgets.QPushButton("Start", self)
+        self.btn_stop = QtWidgets.QPushButton("Abort", self)
+        self.btn_close = QtWidgets.QPushButton("Close", self)
+        btn_row.addWidget(self.btn_start)
+        btn_row.addWidget(self.btn_stop)
+        btn_row.addStretch(1)
+        btn_row.addWidget(self.btn_close)
+        layout.addLayout(btn_row)
 
-        # Preset last used state if dialog reopened quickly
-        self._on_status(
-            {
-                "active": self.svc.active,
-                "name": self.svc.target_name,
-                "got": self.svc.samples_got,
-                "need": self.svc.samples_needed,
-                "folder": "",
-                "done": False,
-                "cam": getattr(self.svc, "target_cam", None),
-            }
-        )
+        self.btn_stop.setEnabled(False)
 
-    # ----------------------------------------------------------------- Slots
+        self.btn_start.clicked.connect(self._on_start)
+        self.btn_stop.clicked.connect(self._on_stop)
+        self.btn_close.clicked.connect(self.reject)
 
-    def _start(self) -> None:
-        nm = self.name.text().strip()
-        if not nm:
-            QtWidgets.QMessageBox.warning(self, "Enrollment", "Enter a name.")
+    def _wire_signals(self) -> None:
+        self.ctrl.status_changed.connect(self._on_status)
+
+    # ------------------------------------------------------------------ slots
+
+    @Slot()
+    def _on_start(self) -> None:
+        name = self.name_edit.text().strip()
+        if not name:
+            QtWidgets.QMessageBox.warning(self, "Name required", "Please enter a name/label.")
             return
-        cam_name = self.cam_combo.currentData()
-        # Uses new EnrollmentService.start(name, n, cam_name)
-        self.svc.start(nm, int(self.target.value()), cam_name=cam_name)
 
-    def _abort(self) -> None:
-        # Abort the current enrollment session
-        self.svc.end()
+        total = self.samples_spin.value()
+        self.ctrl.start(name=name, total_samples=total, target_cam=None)
 
-    @QtCore.pyqtSlot(dict)
-    def _on_status(self, st: dict) -> None:
-        got = int(st.get("got", 0))
-        need = max(1, int(st.get("need", 1)))
-        pct = int(round(100.0 * got / need))
-        self.pb.setValue(pct)
+        self.btn_start.setEnabled(False)
+        self.btn_stop.setEnabled(True)
+        self.status_label.setText("Collecting samples…")
 
-        nm = st.get("name", "")
-        active = bool(st.get("active", False))
-        done = bool(st.get("done", False))
-        folder = st.get("folder", "")
-        cam = st.get("cam", None)
+    @Slot()
+    def _on_stop(self) -> None:
+        self.ctrl.stop()
+        self.btn_start.setEnabled(True)
+        self.btn_stop.setEnabled(False)
 
-        if nm and not self.name.text().strip():
-            self.name.setText(nm)
+    @Slot(dict)
+    def _on_status(self, data: dict) -> None:
+        active = data.get("active", False)
+        done = data.get("done", False)
+        name = data.get("target_name", "")
+        need = data.get("samples_needed", 0)
+        got = data.get("samples_got", 0)
+        existing = data.get("existing_count", 0)
+        err = data.get("last_error")
 
-        # Reflect active camera back into combo if known
-        if cam is not None:
-            idx = self.cam_combo.findData(cam)
-            if idx >= 0:
-                self.cam_combo.setCurrentIndex(idx)
-
-        if active:
-            cam_txt = f" on {cam}" if cam else ""
-            self.lbl_status.setText(f"Collecting {got}/{need}{cam_txt} → {folder}")
-        elif done:
-            self.lbl_status.setText(
-                f"Done {got}/{need}. Training saved to models/lbph_faces.xml."
-            )
+        if err:
+            self.status_label.setText(f"Error: {err}")
         else:
-            self.lbl_status.setText("Idle")
+            self.status_label.setText(
+                f"Enrolling '{name}' – existing {existing}, "
+                f"this session {got}/{need}"
+            )
+
+        if done:
+            self.btn_start.setEnabled(True)
+            self.btn_stop.setEnabled(False)
+            self.status_label.setText(
+                f"Done {got}/{need}. Training saved models to models/lbphfaces.xml"
+            )

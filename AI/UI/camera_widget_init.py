@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from PyQt6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtWidgets
 
 from detectors import DetectorThread, DetectorConfig
 from recorder import PrebufferRecorder

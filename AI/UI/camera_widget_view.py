@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PyQt6 import QtCore, QtWidgets, QtGui
+from PySide6 import QtCore, QtWidgets, QtGui
 
 
 def attach_view_handlers(cls) -> None:

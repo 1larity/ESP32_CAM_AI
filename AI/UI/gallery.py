@@ -5,7 +5,7 @@ from typing import List
 
 import cv2 as cv
 import numpy as np
-from PyQt6 import QtWidgets, QtGui, QtCore
+from PySide6 import QtWidgets, QtGui, QtCore
 
 
 def _thumb(path: Path, max_size: int = 160) -> QtGui.QPixmap:

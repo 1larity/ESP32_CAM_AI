@@ -6,7 +6,8 @@ from __future__ import annotations
 from typing import Optional
 import time
 
-from PyQt6 import QtCore, QtGui
+from PySide6 import QtCore, QtGui
+from PySide6.QtCore import Slot
 
 from detectors import DetectionPacket
 from enrollment import EnrollmentService
@@ -18,7 +19,9 @@ from UI.overlay_stats import FpsCounter, compute_yolo_stats, YoloStats
 def attach_video_handlers(cls) -> None:
     """Inject frame / detector / overlay / HUD helpers into CameraWidget."""
 
-    # ------------------------------------------------------------------ frame / detector / recorder
+    # ------------------------------------------------------------------
+    # frame / detector / recorder
+    # ------------------------------------------------------------------
 
     def _poll_frame(self) -> None:
         ok, frame, ts_ms = self._capture.read()
@@ -87,15 +90,21 @@ def attach_video_handlers(cls) -> None:
                 self._draw_hud(painter)
 
             # Bottom-left stats overlay (same font as HUD)
-            if fps is not None and stats is not None and getattr(self._overlays, "stats", False):
-                self._draw_stats_line(painter, fps, stats, pixmap.width(), pixmap.height())
+            if (
+                fps is not None
+                and stats is not None
+                and getattr(self._overlays, "stats", False)
+            ):
+                self._draw_stats_line(
+                    painter, fps, stats, pixmap.width(), pixmap.height()
+                )
         finally:
             painter.end()
 
         self._pixmap_item.setPixmap(pixmap)
         self._scene.setSceneRect(QtCore.QRectF(pixmap.rect()))
 
-    @QtCore.pyqtSlot(object)
+    @Slot(object)
     def _on_detections(self, pkt_obj) -> None:
         if not self._ai_enabled:
             return
@@ -121,7 +130,9 @@ def attach_video_handlers(cls) -> None:
             # Draw overlays immediately on top of the last frame
             self._update_pixmap(self._last_bgr, pkt)
 
-    # ------------------------------------------------------------------ HUD
+    # ------------------------------------------------------------------
+    # HUD + stats line
+    # ------------------------------------------------------------------
 
     def _draw_hud(self, p: QtGui.QPainter) -> None:
         """
@@ -152,14 +163,15 @@ def attach_video_handlers(cls) -> None:
         # Text
         p.drawText(
             rect.adjusted(4, 0, -4, 0),
-            QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter,
+            QtCore.Qt.AlignmentFlag.AlignLeft
+            | QtCore.Qt.AlignmentFlag.AlignVCenter,
             text,
         )
 
     def _draw_stats_line(
         self, p: QtGui.QPainter, fps: float, stats: YoloStats, width: int, height: int
     ) -> None:
-        """Draw a single-line stats overlay in the bottom-left corner.  
+        """Draw a single-line stats overlay in the bottom-left corner.
         Font size matches the current painter font (same as HUD)."""
         margin = 6
         text = (
@@ -189,6 +201,10 @@ def attach_video_handlers(cls) -> None:
             | QtCore.Qt.AlignmentFlag.AlignVCenter,
             text,
         )
+
+    # ------------------------------------------------------------------
+    # snapshot + recording
+    # ------------------------------------------------------------------
 
     def _snapshot(self) -> None:
         if self._last_bgr is None:

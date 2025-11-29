@@ -1,7 +1,7 @@
 from __future__ import annotations
 from typing import Optional
-from PyQt6 import QtCore, QtGui, QtWidgets
-
+from PySide6 import QtCore, QtGui, QtWidgets
+from PySide6.QtCore import Signal, Slot
 from settings import AppSettings, CameraSettings, save_settings
 from utils import open_folder_or_warn
 from models import ModelManager
@@ -19,9 +19,10 @@ class _FaceRebuildWorker(QtCore.QObject):
     """
     Runs the LBPH model rebuild in a background thread.
     """
-    finished = QtCore.pyqtSignal(bool)
 
-    @QtCore.pyqtSlot()
+    finished = Signal(bool)
+
+    @Slot()
     def run(self) -> None:
         svc = get_enrollment_service()
         ok = svc.rebuild_lbph_model_from_disk()
@@ -264,7 +265,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # Progress dialog (indeterminate)
         dlg = QtWidgets.QProgressDialog(
-            "Rebuilding face model from disk…", None, 0, 0, self
+            "Rebuilding face model from disk…", "", 0, 0, self
         )
         dlg.setWindowTitle(title)
         dlg.setWindowModality(QtCore.Qt.WindowModality.ApplicationModal)
@@ -291,6 +292,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         thread.start()
 
+    @Slot(bool)
     def _on_face_rebuild_finished(self, ok: bool) -> None:
         """
         Invoked in the GUI thread when the background rebuild finishes.

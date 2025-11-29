@@ -1,11 +1,10 @@
 from __future__ import annotations
 from typing import Optional
-
-from PyQt6 import QtCore, QtGui, QtWidgets
-
+from PySide6 import QtCore, QtGui, QtWidgets
+from PySide6.QtCore import Signal, Slot
 
 class GraphicsView(QtWidgets.QGraphicsView):
-    zoomChanged = QtCore.pyqtSignal(float)
+    zoomChanged = QtCore.Signal(float)
 
     def __init__(self, scene: QtWidgets.QGraphicsScene, parent: Optional[QtWidgets.QWidget] = None):
         super().__init__(scene, parent)
