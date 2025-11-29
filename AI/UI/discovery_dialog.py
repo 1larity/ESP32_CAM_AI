@@ -7,15 +7,15 @@ import socket
 import threading
 import queue
 from typing import Set
-
-from PyQt6 import QtWidgets, QtCore
+from PySide6 import QtWidgets, QtCore
+from PySide6.QtCore import Signal, Slot
 import requests
 
 
 def _guess_primary_ipv4() -> str | None:
     """
     Try to get the primary IPv4 by opening a UDP socket to a public IP.
-    This avoids cases where gethostname() resolves to 127.0.x.x.
+    This avoids platform-specific APIs.
     """
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -34,256 +34,212 @@ def _default_subnet() -> str:
     Try to guess the local /24 from the primary IPv4; fall back to 192.168.1.x.
     """
     ip = _guess_primary_ipv4()
-    if ip:
-        parts = ip.split(".")
-        if len(parts) == 4:
-            return ".".join(parts[:3]) + "."
-    # Fallback
-    return "192.168.1."
+    if not ip:
+        return "192.168.1."
+
+    parts = ip.split(".")
+    if len(parts) != 4:
+        return "192.168.1."
+
+    # assume /24
+    return ".".join(parts[:3]) + "."
+
+
+def _probe_ip(ip: str, timeout: float = 0.5) -> dict | None:
+    """
+    Probe an IP for ESP32-CAM HTTP endpoints.
+
+    Returns a dict with:
+      {
+        "ip": str,
+        "auth": bool,
+        "stream_ok": bool | None,
+        "ping": bool,
+        "notes": str,
+      }
+    or None if nothing useful was detected.
+    """
+    base = f"http://{ip}"
+    session = requests.Session()
+    session.headers.update({"User-Agent": "ESP32-CAM-Discovery/1.0"})
+    # 1) /ping
+    try:
+        r = session.get(f"{base}/ping", timeout=timeout)
+        text = (r.text or "").strip().lower()
+        if r.status_code == 200 and text.startswith("pong"):
+            info = {
+                "ip": ip,
+                "ping": True,
+                "auth": False,
+                "stream_ok": None,
+                "notes": "",
+            }
+            # try / (may 401 if auth on)
+            try:
+                r2 = session.get(base + "/", timeout=timeout)
+                if r2.status_code == 401:
+                    info["auth"] = True
+                    info["notes"] = "Auth required"
+                elif r2.status_code == 200:
+                    info["notes"] = "HTTP OK"
+            except Exception:
+                pass
+            # try :81/stream
+            try:
+                r3 = session.get(f"{base}:81/stream", timeout=timeout, stream=True)
+                if r3.status_code == 200:
+                    info["stream_ok"] = True
+                elif r3.status_code == 401:
+                    info["auth"] = True
+            except Exception:
+                pass
+            return info
+    except Exception:
+        pass
+
+    return None
 
 
 class DiscoveryDialog(QtWidgets.QDialog):
     # idx, total, ip
-    progress = QtCore.pyqtSignal(int, int, str)
+    progress = Signal(int, int, str)
     # label
-    addItemSignal = QtCore.pyqtSignal(str)
+    addItemSignal = Signal(str)
     # scan finished (renamed earlier to avoid clashing with QDialog.done())
-    scanFinished = QtCore.pyqtSignal()
+    scanFinished = Signal()
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Discover ESP32-CAM")
+        self.setWindowTitle("Discover ESP32-CAMs")
+        self.resize(600, 400)
 
-        # --- UI ---
-        self.edit_subnet = QtWidgets.QLineEdit(_default_subnet())
-        self.edit_range_from = QtWidgets.QSpinBox()
-        self.edit_range_from.setRange(1, 254)
-        self.edit_range_from.setValue(1)
+        self._stop_flag = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._queue: "queue.Queue[str]" = queue.Queue()
+        self._seen_ips: Set[str] = set()
 
-        self.edit_range_to = QtWidgets.QSpinBox()
-        self.edit_range_to.setRange(1, 254)
-        self.edit_range_to.setValue(254)
+        self._build_ui()
+        self._wire_signals()
 
-        self.btn_scan = QtWidgets.QPushButton("Scan")
-        self.btn_stop = QtWidgets.QPushButton("Stop")
-        self.btn_stop.setEnabled(False)
+    # ------------------------------------------------------------------ UI
 
-        self.list = QtWidgets.QListWidget()
-        self.lbl = QtWidgets.QLabel(
-            "Finds devices responding on /api/status (preferred), "
-            "/status, /stream, or / on ports 80/81.\n"
-            "401 Unauthorized is treated as a hit (auth-only /api/status).\n"
-            "Scanning uses a concurrent worker pool for speed."
-        )
-        self.lbl_progress = QtWidgets.QLabel("Idle")
-        self.pb = QtWidgets.QProgressBar()
-        self.pb.setMinimum(0)
-        self.pb.setMaximum(0)
-        self.pb.setValue(0)
+    def _build_ui(self) -> None:
+        layout = QtWidgets.QVBoxLayout(self)
 
         form = QtWidgets.QFormLayout()
-        form.addRow("Subnet prefix", self.edit_subnet)
-        form.addRow("Range", self._range_row())
+        self.subnet_edit = QtWidgets.QLineEdit(self)
+        self.subnet_edit.setText(_default_subnet())
+        form.addRow("Subnet (x.x.x.)", self.subnet_edit)
+        layout.addLayout(form)
 
-        btns = QtWidgets.QHBoxLayout()
-        btns.addWidget(self.btn_scan)
-        btns.addWidget(self.btn_stop)
-        btns.addStretch(1)
+        self.scan_button = QtWidgets.QPushButton("Scan", self)
+        self.scan_button.clicked.connect(self._on_scan_clicked)
+        layout.addWidget(self.scan_button)
 
-        lay = QtWidgets.QVBoxLayout(self)
-        lay.addLayout(form)
-        lay.addLayout(btns)
-        lay.addWidget(self.lbl_progress)
-        lay.addWidget(self.pb)
-        lay.addWidget(self.list)
-        lay.addWidget(self.lbl)
+        self.list_widget = QtWidgets.QListWidget(self)
+        layout.addWidget(self.list_widget)
 
-        # --- state ---
-        self._stop = threading.Event()
-        self._seen_keys: Set[str] = set()
-        self._lock = threading.Lock()  # protects _seen_keys and progress counter
+        btn_row = QtWidgets.QHBoxLayout()
+        self.btn_add_selected = QtWidgets.QPushButton("Add selected camera", self)
+        self.btn_close = QtWidgets.QPushButton("Close", self)
+        btn_row.addWidget(self.btn_add_selected)
+        btn_row.addStretch(1)
+        btn_row.addWidget(self.btn_close)
+        layout.addLayout(btn_row)
 
-        # --- wire ---
-        self.btn_scan.clicked.connect(self._start)
-        self.btn_stop.clicked.connect(self._cancel)
+        self.btn_add_selected.clicked.connect(self._on_add_selected)
+        self.btn_close.clicked.connect(self.reject)
 
+    def _wire_signals(self) -> None:
         self.progress.connect(self._on_progress)
-        self.addItemSignal.connect(self._add_item)
-        self.scanFinished.connect(self._done)
+        self.addItemSignal.connect(self._on_add_item)
+        self.scanFinished.connect(self._on_scan_finished)
 
-    # ------------------------------------------------------------------ UI helpers
+    # ------------------------------------------------------------------ scanning logic
 
-    def _range_row(self) -> QtWidgets.QWidget:
-        w = QtWidgets.QWidget()
-        h = QtWidgets.QHBoxLayout(w)
-        h.setContentsMargins(0, 0, 0, 0)
-        h.addWidget(self.edit_range_from)
-        h.addWidget(QtWidgets.QLabel("to"))
-        h.addWidget(self.edit_range_to)
-        h.addStretch(1)
-        return w
-
-    # ------------------------------------------------------------------ control
-
-    def _start(self) -> None:
-        self.list.clear()
-        self._seen_keys.clear()
-        self._stop.clear()
-
-        self.btn_scan.setEnabled(False)
-        self.btn_stop.setEnabled(True)
-
-        subnet = self.edit_subnet.text().strip()
-        a = int(self.edit_range_from.value())
-        b = int(self.edit_range_to.value())
-        total = max(0, b - a + 1)
-
-        self.pb.setMinimum(0)
-        if total > 0:
-            self.pb.setMaximum(total)
-            self.pb.setValue(0)
-            self.lbl_progress.setText(f"Scanning {subnet}{a} to {subnet}{b} (0/{total})")
-        else:
-            self.pb.setMaximum(0)
-            self.lbl_progress.setText("Scanning...")
-
-        # Run the IP scanning in a single manager thread which spawns a worker pool.
-        t = threading.Thread(
-            target=self._scan_range,
-            args=(subnet, a, b, total),
-            daemon=True,
-        )
-        t.start()
-
-    def _cancel(self) -> None:
-        self._stop.set()
-        self.btn_scan.setEnabled(True)
-        self.btn_stop.setEnabled(False)
-        self.lbl_progress.setText("Scan cancelled.")
-
-    # ------------------------------------------------------------------ scanning (concurrent workers over IPs)
-
-    def _scan_range(self, subnet: str, a: int, b: int, total: int) -> None:
-        # Prepare queue of IPs to scan
-        ips = [f"{subnet}{i}" for i in range(a, b + 1)]
-        q: queue.Queue[str] = queue.Queue()
-        for ip in ips:
-            q.put(ip)
-
-        total = len(ips)
-        if total == 0:
-            self.scanFinished.emit()
+    @Slot()
+    def _on_scan_clicked(self) -> None:
+        if self._thread is not None and self._thread.is_alive():
+            # Stop existing scan
+            self._stop_flag.set()
             return
 
-        # Shared progress counter
-        idx = 0
+        subnet = self.subnet_edit.text().strip()
+        if not subnet.endswith("."):
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Invalid subnet",
+                "Subnet must end with a dot, e.g. 192.168.1.",
+            )
+            return
 
-        # Prioritise /api/status on port 80, then other combinations.
-        paths = ("/api/status", "/status", "/stream", "/")
-        ports = (80, 81)
+        self._stop_flag.clear()
+        self._seen_ips.clear()
+        self.list_widget.clear()
 
-        def worker() -> None:
-            nonlocal idx
-            sess = requests.Session()
-            sess.headers.update({"User-Agent": "ESP32-CAM-Discovery/1.0"})
-            while not self._stop.is_set():
-                try:
-                    ip = q.get_nowait()
-                except queue.Empty:
-                    break
+        self.scan_button.setText("Stop")
+        self.scan_button.setEnabled(True)
 
-                found_for_ip = False
+        self._thread = threading.Thread(target=self._scan_worker, args=(subnet,))
+        self._thread.daemon = True
+        self._thread.start()
 
-                for port in ports:
-                    if self._stop.is_set():
-                        break
+    def _scan_worker(self, subnet: str) -> None:
+        """
+        Run in a background thread; probes IPs.
+        """
+        total = 254
+        for idx, host in enumerate(range(1, 255), start=1):
+            if self._stop_flag.is_set():
+                break
 
-                    for path in paths:
-                        if self._stop.is_set():
-                            break
+            ip = f"{subnet}{host}"
+            self.progress.emit(idx, total, ip)
 
-                        key = f"{ip}:{port}"
-                        # If we've already got this IP:port, skip further paths
-                        with self._lock:
-                            if key in self._seen_keys:
-                                found_for_ip = True
-                                break
-
-                        url = f"http://{ip}:{port}{path}"
-                        try:
-                            r = sess.get(url, timeout=0.6)
-                        except Exception:
-                            continue
-
-                        # Accept 2xx and 401 as hits
-                        if (200 <= r.status_code < 300) or (r.status_code == 401):
-                            with self._lock:
-                                if key in self._seen_keys:
-                                    # Another worker already recorded it
-                                    found_for_ip = True
-                                    break
-                                self._seen_keys.add(key)
-
-                            label = f"{ip}:{port}  {path}"
-
-                            # If this is /api/status and NOT 401, try to pull a name from JSON
-                            if path == "/api/status" and (200 <= r.status_code < 300):
-                                try:
-                                    data = r.json()
-                                    nm = data.get("name") or data.get("camera")
-                                    if nm:
-                                        label = f"{ip}:{port}  {nm} (/api/status)"
-                                except Exception:
-                                    pass
-
-                            # emit to GUI thread
-                            self.addItemSignal.emit(label)
-                            found_for_ip = True
-                            break
-
-                    if found_for_ip:
-                        break
-
-                # progress update
-                with self._lock:
-                    idx += 1
-                    cur_idx = idx
-
-                self.progress.emit(cur_idx, total, ip)
-                q.task_done()
-
-        # Spawn worker pool
-        num_workers = min(32, total)
-        threads = []
-        for _ in range(num_workers):
-            t = threading.Thread(target=worker, daemon=True)
-            t.start()
-            threads.append(t)
-
-        # Wait for workers to finish
-        for t in threads:
-            t.join()
+            info = _probe_ip(ip)
+            if info is not None:
+                self.addItemSignal.emit(
+                    f"{info['ip']}  ping={info['ping']}  auth={info['auth']}  stream={info['stream_ok']}  {info['notes']}"
+                )
 
         self.scanFinished.emit()
 
-    # ------------------------------------------------------------------ slots (GUI thread)
-
-    @QtCore.pyqtSlot()
-    def _done(self) -> None:
-        self.btn_scan.setEnabled(True)
-        self.btn_stop.setEnabled(False)
-        self.lbl_progress.setText("Scan complete.")
-
-    @QtCore.pyqtSlot(int, int, str)
+    @Slot(int, int, str)
     def _on_progress(self, idx: int, total: int, ip: str) -> None:
-        if total > 0:
-            self.pb.setMaximum(total)
-            self.pb.setValue(min(idx, total))
-            self.lbl_progress.setText(f"Scanning {ip} ({idx}/{total})")
-        else:
-            self.pb.setMaximum(0)
-            self.lbl_progress.setText(f"Scanning {ip}")
+        self.setWindowTitle(f"Discover ESP32-CAMs – {idx}/{total} ({ip})")
 
-    @QtCore.pyqtSlot(str)
-    def _add_item(self, label: str) -> None:
-        self.list.addItem(label)
+    @Slot(str)
+    def _on_add_item(self, label: str) -> None:
+        self.list_widget.addItem(label)
+
+    @Slot()
+    def _on_scan_finished(self) -> None:
+        self.scan_button.setText("Scan")
+        self.scan_button.setEnabled(True)
+        self.setWindowTitle("Discover ESP32-CAMs")
+
+    # ------------------------------------------------------------------ selection
+
+    @Slot()
+    def _on_add_selected(self) -> None:
+        item = self.list_widget.currentItem()
+        if not item:
+            QtWidgets.QMessageBox.information(
+                self, "No selection", "Please select a discovered camera."
+            )
+            return
+
+        # The label starts with the IP
+        label = item.text()
+        ip = label.split()[0]
+
+        # Just close with Accepted and stash IP in a property so the caller
+        # can read it (or extend later with more data).
+        self.selected_ip = ip
+        self.accept()
+
+    # ------------------------------------------------------------------ close
+
+    def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # type: ignore[override]
+        self._stop_flag.set()
+        super().closeEvent(event)

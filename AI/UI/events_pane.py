@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Dict, List
-from PyQt6 import QtWidgets, QtCore
+from PySide6 import QtWidgets, QtCore
 
 class EventsPane(QtWidgets.QWidget):
     def __init__(self, logs_dir: Path, parent=None):

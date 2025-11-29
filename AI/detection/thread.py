@@ -1,15 +1,13 @@
 from __future__ import annotations
-
 import os
 import threading
 import time
 from dataclasses import dataclass
 from typing import Optional, Tuple
-
 import cv2
 import numpy as np
-from PyQt6 import QtCore
-
+from PySide6 import QtCore
+from PySide6.QtCore import Signal, Slot
 from utils import monotonic_ms
 from .core import run_yolo
 from .lbph import load_lbph, run_faces
@@ -37,7 +35,7 @@ class DetectorConfig:
 
 
 class DetectorThread(QtCore.QThread):
-    resultsReady = QtCore.pyqtSignal(object)
+    resultsReady = QtCore.Signal(object)
 
     def __init__(self, cfg: DetectorConfig, name: str):
         super().__init__()

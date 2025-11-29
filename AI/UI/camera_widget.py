@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PyQt6 import QtGui, QtWidgets
+from PySide6 import QtGui, QtWidgets
 
 from settings import AppSettings, CameraSettings
 

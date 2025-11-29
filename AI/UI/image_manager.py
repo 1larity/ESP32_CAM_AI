@@ -2,7 +2,7 @@
 # Faces and Pets manager with rename, delete, open folder, and Gallery launcher.
 from __future__ import annotations
 from pathlib import Path
-from PyQt6 import QtWidgets
+from PySide6 import QtWidgets
 from utils import open_folder_or_warn
 from settings import BASE_DIR
 from UI.gallery import GalleryDialog

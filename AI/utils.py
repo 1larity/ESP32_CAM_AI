@@ -4,7 +4,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 import numpy as np, cv2 as cv
-from PyQt6 import QtGui, QtWidgets, QtCore
+from PySide6 import QtGui, QtWidgets, QtCore
 
 def monotonic_ms() -> int:
     return int(time.monotonic() * 1000)

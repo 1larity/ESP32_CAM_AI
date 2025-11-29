@@ -1,12 +1,9 @@
 # overlays.py
 # Overlay renderer with toggles and render order: boxes → labels → crosshair + HUD.
 from __future__ import annotations
-
 from dataclasses import dataclass
 from typing import Tuple
-
-from PyQt6 import QtGui, QtCore
-
+from PySide6 import QtGui, QtCore
 from detectors import DetectionPacket, DetBox
 import time
 

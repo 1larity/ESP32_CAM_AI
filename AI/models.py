@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Tuple
 import requests
-from PyQt6 import QtWidgets
+from PySide6 import QtWidgets
 from settings import AppSettings, BASE_DIR
 from utils import ensure_dir
 
@@ -70,7 +70,6 @@ class _DownloadDialog(QtWidgets.QDialog):
         self.setWindowTitle(title)
         self.url = url
         self.path = path
-        from PyQt6 import QtWidgets
         self.pb = QtWidgets.QProgressBar()
         self.lbl = QtWidgets.QLabel(url)
         self.btn = QtWidgets.QPushButton("Cancel")
@@ -80,7 +79,6 @@ class _DownloadDialog(QtWidgets.QDialog):
         self._ok = False
 
     def exec_and_download(self) -> bool:
-        from PyQt6 import QtWidgets
         try:
             with requests.get(self.url, stream=True, timeout=(5, 60)) as r:
                 r.raise_for_status()

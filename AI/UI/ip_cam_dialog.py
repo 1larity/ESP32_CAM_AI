@@ -1,7 +1,7 @@
 # ip_cam_dialog.py
 from __future__ import annotations
 from typing import Optional
-from PyQt6 import QtWidgets
+from PySide6 import QtWidgets
 from settings import CameraSettings
 
 class AddIpCameraDialog(QtWidgets.QDialog):
