@@ -1,20 +1,15 @@
-# discovery_dialog.py
-# Local subnet scanner for ESP32-CAM.
-# Fast concurrent scan; detects cameras by /api/status (200 OK or 401 Unauthorized),
-# with fallbacks to /ping, /, and :81/stream.
+# UI/discovery_dialog.py
+# Local subnet scanner for ESP32-CAM. Checks ONLY /api/status on port 80.
 
 from __future__ import annotations
 
 import socket
 import threading
-from typing import Set, Optional, Dict, Any
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from PySide6 import QtCore, QtWidgets
 
-from PySide6 import QtWidgets, QtCore, QtGui
-from PySide6.QtCore import Signal, Slot
-
-import requests
+from discovery.scanner import RangeScanner, ScanConfig
+from discovery.probe import ProbeResult
 
 
 def _guess_primary_ipv4() -> str | None:
@@ -36,323 +31,156 @@ def _default_subnet() -> str:
     parts = ip.split(".")
     if len(parts) != 4:
         return "192.168.1."
-    return ".".join(parts[:3]) + "."
-
-
-def _probe_ip(ip: str, timeout: float = 0.35) -> Dict[str, Any] | None:
-    """
-    Probe an IP for ESP32-CAM endpoints without knowing credentials.
-
-    Hit criteria:
-      - /api/status returns 200 OR 401  -> HIT (via=status)
-      - /ping returns "pong"           -> HIT (via=ping)
-
-    Returns:
-      {
-        "ip": str,
-        "hit": bool,
-        "hit_via": "status" | "ping",
-        "auth": bool,
-        "status": "-" | "ok" | "401",
-        "ping": None | True | False,        # None = not tried
-        "stream": "-" | "ok" | "401",
-        "notes": str,
-      }
-    or None if nothing detected.
-    """
-    base = f"http://{ip}"
-    session = requests.Session()
-    session.headers.update({"User-Agent": "ESP32-CAM-Discovery/2.0"})
-
-    info: Dict[str, Any] = {
-        "ip": ip,
-        "hit": False,
-        "hit_via": "",
-        "auth": False,
-        "status": "-",      # "-", "ok", "401"
-        "ping": None,       # None=not tried, True/False=tried
-        "stream": "-",      # "-", "ok", "401"
-        "notes": "",
-    }
-
-    # 1) Prefer /api/status (your discovery endpoint)
-    try:
-        r = session.get(f"{base}/api/status", timeout=timeout)
-        if r.status_code == 200:
-            info["hit"] = True
-            info["hit_via"] = "status"
-            info["status"] = "ok"
-            try:
-                js = r.json()
-                name = js.get("name") or js.get("cam") or js.get("id")
-                info["notes"] = f"status OK ({name})" if name else "status OK"
-            except Exception:
-                info["notes"] = "status OK"
-        elif r.status_code == 401:
-            # Unknown creds, but still a discovered camera
-            info["hit"] = True
-            info["hit_via"] = "status"
-            info["status"] = "401"
-            info["auth"] = True
-            info["notes"] = "status auth required"
-    except Exception:
-        pass
-
-    # 2) Fallback: /ping
-    if not info["hit"]:
-        info["ping"] = False
-        try:
-            r = session.get(f"{base}/ping", timeout=timeout)
-            text = (r.text or "").strip().lower()
-            if r.status_code == 200 and text.startswith("pong"):
-                info["hit"] = True
-                info["hit_via"] = "ping"
-                info["ping"] = True
-                info["notes"] = "pong"
-        except Exception:
-            pass
-
-    if not info["hit"]:
-        return None
-
-    # 3) Enrich: check / (may 401)
-    try:
-        r2 = session.get(f"{base}/", timeout=timeout)
-        if r2.status_code == 401:
-            info["auth"] = True
-            if not info["notes"]:
-                info["notes"] = "auth required"
-        elif r2.status_code == 200 and not info["notes"]:
-            info["notes"] = "HTTP OK"
-    except Exception:
-        pass
-
-    # 4) Enrich: try :81/stream (may 200 or 401)
-    try:
-        r3 = session.get(f"{base}:81/stream", timeout=timeout, stream=True)
-        if r3.status_code == 200:
-            info["stream"] = "ok"
-        elif r3.status_code == 401:
-            info["stream"] = "401"
-            info["auth"] = True
-    except Exception:
-        pass
-
-    return info
+    return f"{parts[0]}.{parts[1]}.{parts[2]}."
 
 
 class DiscoveryDialog(QtWidgets.QDialog):
-    # idx, total, ip
-    progress = Signal(int, int, str)
-    # label
-    addItemSignal = Signal(str)
-    # scan finished
-    scanFinished = Signal()
+    progress = QtCore.Signal(int, int, str)   # idx, total, ip
+    addItemSignal = QtCore.Signal(str)        # label
+    scanFinished = QtCore.Signal()            # scan finished
 
     def __init__(self, app_cfg, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self.app_cfg = app_cfg
 
-        self.setWindowTitle("Discover ESP32-CAMs")
-        self.resize(720, 420)
+        self.setWindowTitle("Discover ESP32-CAM")
 
-        self._stop_flag = threading.Event()
-        self._thread: threading.Thread | None = None
-        self._seen_ips: Set[str] = set()
+        self.edit_subnet = QtWidgets.QLineEdit(_default_subnet())
 
-        self._build_ui()
-        self._wire_signals()
+        self.edit_range_from = QtWidgets.QSpinBox()
+        self.edit_range_from.setRange(1, 254)
+        self.edit_range_from.setValue(1)
 
-    # ------------------------------------------------------------------ UI
+        self.edit_range_to = QtWidgets.QSpinBox()
+        self.edit_range_to.setRange(1, 254)
+        self.edit_range_to.setValue(254)
 
-    def _build_ui(self) -> None:
-        layout = QtWidgets.QVBoxLayout(self)
+        self.btn_scan = QtWidgets.QPushButton("Scan")
+        self.btn_stop = QtWidgets.QPushButton("Stop")
+        self.btn_stop.setEnabled(False)
+
+        self.list = QtWidgets.QListWidget()
+
+        self.lbl_help = QtWidgets.QLabel(
+            "Checks only /api/status on port 80.\n"
+            "401 Unauthorized is treated as a hit (device is present but locked).\n"
+            "Concurrent worker pool scan for speed."
+        )
+        self.lbl_progress = QtWidgets.QLabel("Idle")
+
+        self.pb = QtWidgets.QProgressBar()
+        self.pb.setMinimum(0)
+        self.pb.setMaximum(0)
+        self.pb.setValue(0)
 
         form = QtWidgets.QFormLayout()
+        form.addRow("Subnet prefix", self.edit_subnet)
 
-        self.subnet_edit = QtWidgets.QLineEdit(self)
-        self.subnet_edit.setText(_default_subnet())
-        form.addRow("Subnet (x.x.x.)", self.subnet_edit)
+        range_row = QtWidgets.QWidget()
+        h = QtWidgets.QHBoxLayout(range_row)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.addWidget(self.edit_range_from)
+        h.addWidget(QtWidgets.QLabel("to"))
+        h.addWidget(self.edit_range_to)
+        h.addStretch(1)
+        form.addRow("Range", range_row)
 
-        rng_row = QtWidgets.QHBoxLayout()
-        self.start_spin = QtWidgets.QSpinBox(self)
-        self.start_spin.setRange(1, 254)
-        self.start_spin.setValue(1)
-        rng_row.addWidget(QtWidgets.QLabel("Start host", self))
-        rng_row.addWidget(self.start_spin)
+        btns = QtWidgets.QHBoxLayout()
+        btns.addWidget(self.btn_scan)
+        btns.addWidget(self.btn_stop)
 
-        self.end_spin = QtWidgets.QSpinBox(self)
-        self.end_spin.setRange(1, 254)
-        self.end_spin.setValue(254)
-        rng_row.addWidget(QtWidgets.QLabel("End host", self))
-        rng_row.addWidget(self.end_spin)
+        lay = QtWidgets.QVBoxLayout(self)
+        lay.addLayout(form)
+        lay.addLayout(btns)
+        lay.addWidget(self.lbl_help)
+        lay.addWidget(self.lbl_progress)
+        lay.addWidget(self.pb)
+        lay.addWidget(self.list)
 
-        rng_wrap = QtWidgets.QWidget(self)
-        rng_wrap.setLayout(rng_row)
-        form.addRow("Range", rng_wrap)
+        self._stop = threading.Event()
+        self._scanner: RangeScanner | None = None
 
-        perf_row = QtWidgets.QHBoxLayout()
-        self.workers_spin = QtWidgets.QSpinBox(self)
-        self.workers_spin.setRange(1, 256)
-        self.workers_spin.setValue(64)
-        perf_row.addWidget(QtWidgets.QLabel("Workers", self))
-        perf_row.addWidget(self.workers_spin)
+        self.btn_scan.clicked.connect(self._start)
+        self.btn_stop.clicked.connect(self._cancel)
 
-        self.timeout_ms_spin = QtWidgets.QSpinBox(self)
-        self.timeout_ms_spin.setRange(50, 5000)
-        self.timeout_ms_spin.setValue(350)
-        perf_row.addWidget(QtWidgets.QLabel("Timeout (ms)", self))
-        perf_row.addWidget(self.timeout_ms_spin)
-
-        perf_wrap = QtWidgets.QWidget(self)
-        perf_wrap.setLayout(perf_row)
-        form.addRow("Performance", perf_wrap)
-
-        layout.addLayout(form)
-
-        self.scan_button = QtWidgets.QPushButton("Scan", self)
-        self.scan_button.clicked.connect(self._on_scan_clicked)
-        layout.addWidget(self.scan_button)
-
-        self.list_widget = QtWidgets.QListWidget(self)
-        layout.addWidget(self.list_widget)
-
-        btn_row = QtWidgets.QHBoxLayout()
-        self.btn_add_selected = QtWidgets.QPushButton("Add selected camera", self)
-        self.btn_close = QtWidgets.QPushButton("Close", self)
-        btn_row.addWidget(self.btn_add_selected)
-        btn_row.addStretch(1)
-        btn_row.addWidget(self.btn_close)
-        layout.addLayout(btn_row)
-
-        self.btn_add_selected.clicked.connect(self._on_add_selected)
-        self.btn_close.clicked.connect(self.reject)
-
-    def _wire_signals(self) -> None:
         self.progress.connect(self._on_progress)
-        self.addItemSignal.connect(self._on_add_item)
-        self.scanFinished.connect(self._on_scan_finished)
+        self.addItemSignal.connect(self._add_item)
+        self.scanFinished.connect(self._done)
 
-    # ------------------------------------------------------------------ scanning logic
+    def _start(self) -> None:
+        self.list.clear()
+        self._stop.clear()
 
-    @Slot()
-    def _on_scan_clicked(self) -> None:
-        if self._thread is not None and self._thread.is_alive():
-            self._stop_flag.set()
-            self.scan_button.setEnabled(False)
-            return
+        self.btn_scan.setEnabled(False)
+        self.btn_stop.setEnabled(True)
 
-        subnet = self.subnet_edit.text().strip()
-        if not subnet.endswith("."):
-            QtWidgets.QMessageBox.warning(
-                self,
-                "Invalid subnet",
-                "Subnet must end with a dot, e.g. 192.168.1.",
-            )
-            return
+        subnet = self.edit_subnet.text().strip()
+        a = int(self.edit_range_from.value())
+        b = int(self.edit_range_to.value())
+        total = max(0, b - a + 1)
 
-        start_h = int(self.start_spin.value())
-        end_h = int(self.end_spin.value())
-        if end_h < start_h:
-            QtWidgets.QMessageBox.warning(
-                self, "Invalid range", "End host must be >= start host."
-            )
-            return
+        self.pb.setMinimum(0)
+        if total > 0:
+            self.pb.setMaximum(total)
+            self.pb.setValue(0)
+            self.lbl_progress.setText(f"Scanning {subnet}{a} to {subnet}{b} (0/{total})")
+        else:
+            self.pb.setMaximum(0)
+            self.lbl_progress.setText("Scanning...")
 
-        workers = int(self.workers_spin.value())
-        timeout_s = float(self.timeout_ms_spin.value()) / 1000.0
+        t = threading.Thread(target=self._scan_range, args=(subnet, a, b), daemon=True)
+        t.start()
 
-        self._stop_flag.clear()
-        self._seen_ips.clear()
-        self.list_widget.clear()
+    def _cancel(self) -> None:
+        self._stop.set()
+        if self._scanner is not None:
+            self._scanner.stop()
+        self.btn_scan.setEnabled(True)
+        self.btn_stop.setEnabled(False)
+        self.lbl_progress.setText("Scan cancelled.")
 
-        self.scan_button.setText("Stop")
-        self.scan_button.setEnabled(True)
-
-        self._thread = threading.Thread(
-            target=self._scan_worker, args=(subnet, start_h, end_h, workers, timeout_s)
+    def _scan_range(self, subnet: str, a: int, b: int) -> None:
+        cfg = ScanConfig(
+            max_workers=64,
+            timeout=0.6,
+            port=80,
+            path="/api/status",
         )
-        self._thread.daemon = True
-        self._thread.start()
+        self._scanner = RangeScanner(config=cfg, stop_event=self._stop)
 
-    def _scan_worker(
-        self, subnet: str, start_h: int, end_h: int, workers: int, timeout_s: float
-    ) -> None:
-        hosts = list(range(start_h, end_h + 1))
-        total = len(hosts)
+        def on_progress(idx: int, total: int, ip: str) -> None:
+            self.progress.emit(idx, total, ip)
 
-        submitted = 0
-        completed = 0
+        def on_result(res: ProbeResult) -> None:
+            kind = "AUTH" if res.auth_required else "OK"
+            extra = f"{kind} {res.status_code}  {res.elapsed_ms}ms"
+            if res.name:
+                label = f"{res.ip}:{res.port}  {res.name}  ({res.path})  [{extra}]"
+            else:
+                label = f"{res.ip}:{res.port}  {res.path}  [{extra}]"
+            self.addItemSignal.emit(label)
 
-        with ThreadPoolExecutor(max_workers=workers) as ex:
-            fut_to_ip = {}
-            for host in hosts:
-                if self._stop_flag.is_set():
-                    break
-                ip = f"{subnet}{host}"
-                fut = ex.submit(_probe_ip, ip, timeout_s)
-                fut_to_ip[fut] = ip
-                submitted += 1
-                self.progress.emit(submitted, total, ip)
-
-            for fut in as_completed(list(fut_to_ip.keys())):
-                if self._stop_flag.is_set():
-                    break
-                ip = fut_to_ip[fut]
-                completed += 1
-                self.progress.emit(completed, total, ip)
-
-                try:
-                    info = fut.result()
-                except Exception:
-                    continue
-                if info is None:
-                    continue
-
-                ip2 = info["ip"]
-                if ip2 in self._seen_ips:
-                    continue
-                self._seen_ips.add(ip2)
-
-                self.addItemSignal.emit(
-                    f"{ip2}  via={info['hit_via']}  status={info['status']}  "
-                    f"auth={info['auth']}  stream={info['stream']}  {info['notes']}"
-                )
-
+        self._scanner.scan_range(subnet, a, b, on_progress=on_progress, on_result=on_result)
         self.scanFinished.emit()
 
-    @Slot(int, int, str)
+    @QtCore.Slot()
+    def _done(self) -> None:
+        self.btn_scan.setEnabled(True)
+        self.btn_stop.setEnabled(False)
+        self.pb.setMaximum(1)
+        self.pb.setValue(1)
+        self.lbl_progress.setText("Scan complete.")
+
+    @QtCore.Slot(int, int, str)
     def _on_progress(self, idx: int, total: int, ip: str) -> None:
-        self.setWindowTitle(f"Discover ESP32-CAMs – {idx}/{total} ({ip})")
+        if total > 0:
+            self.pb.setMaximum(total)
+            self.pb.setValue(min(idx, total))
+            self.lbl_progress.setText(f"Scanning {ip} ({idx}/{total})")
+        else:
+            self.pb.setMaximum(0)
+            self.lbl_progress.setText(f"Scanning {ip}")
 
-    @Slot(str)
-    def _on_add_item(self, label: str) -> None:
-        self.list_widget.addItem(label)
-
-    @Slot()
-    def _on_scan_finished(self) -> None:
-        self.scan_button.setText("Scan")
-        self.scan_button.setEnabled(True)
-        self.setWindowTitle("Discover ESP32-CAMs")
-
-    # ------------------------------------------------------------------ selection
-
-    @Slot()
-    def _on_add_selected(self) -> None:
-        item = self.list_widget.currentItem()
-        if not item:
-            QtWidgets.QMessageBox.information(
-                self, "No selection", "Please select a discovered camera."
-            )
-            return
-
-        label = item.text()
-        ip = label.split()[0]
-        self.selected_ip = ip
-        self.accept()
-
-    # ------------------------------------------------------------------ close
-
-    def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # type: ignore[override]
-        self._stop_flag.set()
-        super().closeEvent(event)
+    @QtCore.Slot(str)
+    def _add_item(self, label: str) -> None:
+        self.list.addItem(label)
