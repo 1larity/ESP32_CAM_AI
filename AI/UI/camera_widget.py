@@ -1,7 +1,4 @@
 # camera_widget.py
-# Thin wrapper around the per-camera widget. Most behaviour lives in
-# helper modules (camera_widget_init / _video / _overlays / _view).
-
 from __future__ import annotations
 
 from typing import Optional
@@ -22,11 +19,14 @@ class CameraWidget(QtWidgets.QWidget):
     One camera widget.
 
     Responsibilities are split into helper modules:
-      - init_camera_widget(self)              → build UI, state, wiring
-      - attach_video_handlers(CameraWidget)   → frame polling, recorder, HUD
-      - attach_overlay_handlers(CameraWidget) → AI / overlay toggles
-      - attach_view_handlers(CameraWidget)    → fit / lock helpers
+      - init_camera_widget(self)               → build UI, state, wiring
+      - attach_video_handlers(CameraWidget)    → frame polling, recorder, HUD, detections handler
+      - attach_overlay_handlers(CameraWidget)  → AI / overlay toggles
+      - attach_view_handlers(CameraWidget)     → fit / lock helpers
     """
+
+    # Class-level guard: ensures injected handlers exist before init wiring connects signals.
+    _handlers_attached: bool = False
 
     def __init__(
         self,
@@ -38,11 +38,20 @@ class CameraWidget(QtWidgets.QWidget):
         self.cam_cfg = cam_cfg
         self.app_cfg = app_cfg
 
+        # IMPORTANT:
+        # Ensure injected methods (including _on_detections) exist BEFORE init_camera_widget()
+        # connects signals to them. This avoids startup crashes if module import ordering causes
+        # attach_* not to have run yet.
+        if not self.__class__._handlers_attached:
+            attach_video_handlers(self.__class__)
+            attach_overlay_handlers(self.__class__)
+            attach_view_handlers(self.__class__)
+            self.__class__._handlers_attached = True
+
         # Delegate all heavy init work
         init_camera_widget(self)
 
     # Lifecycle entry points used by MainWindow
-
     def start(self) -> None:
         self._capture.start()
         self._detector.start()
@@ -59,7 +68,7 @@ class CameraWidget(QtWidgets.QWidget):
         event.accept()
 
 
-# Attach heavy-weight behaviour from helper modules
+# Keep module-level attachment too (harmless with the class guard above).
 attach_video_handlers(CameraWidget)
 attach_overlay_handlers(CameraWidget)
 attach_view_handlers(CameraWidget)

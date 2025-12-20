@@ -9,18 +9,22 @@ def attach_overlay_handlers(cls) -> None:
 
     def _on_ai_toggled(self, checked: bool) -> None:
         self._ai_enabled = bool(checked)
+        self._invalidate_overlay_cache()
 
     def _on_ai_yolo_toggled(self, checked: bool) -> None:
         self._overlays.yolo = bool(checked)
         self._sync_overlay_master()
+        self._invalidate_overlay_cache()
 
     def _on_ai_faces_toggled(self, checked: bool) -> None:
         self._overlays.faces = bool(checked)
         self._sync_overlay_master()
+        self._invalidate_overlay_cache()
 
     def _on_ai_pets_toggled(self, checked: bool) -> None:
         self._overlays.pets = bool(checked)
         self._sync_overlay_master()
+        self._invalidate_overlay_cache()
 
     def _sync_overlay_master(self) -> None:
         """Keep 'Detections (boxes + labels)' in sync with YOLO/Faces/Pets."""
@@ -56,17 +60,21 @@ def attach_overlay_handlers(cls) -> None:
             self.act_ai_yolo.setChecked(enabled)
             self.act_ai_faces.setChecked(enabled)
             self.act_ai_pets.setChecked(enabled)
+            self._invalidate_overlay_cache()
+
         finally:
             self._overlay_master_updating = False
 
     def _on_overlay_hud_toggled(self, checked: bool) -> None:
         """Toggle HUD (camera name + date/timestamp)."""
         self._overlays.hud = bool(checked)
+        self._invalidate_overlay_cache()
 
     def _on_overlay_stats_toggled(self, checked: bool) -> None:
         """Toggle bottom-left stats overlay (FPS + counts)."""
         self._overlays.stats = bool(checked)
-
+        self._invalidate_overlay_cache()
+        
     # Bind helpers
     cls._on_ai_toggled = _on_ai_toggled
     cls._on_ai_yolo_toggled = _on_ai_yolo_toggled

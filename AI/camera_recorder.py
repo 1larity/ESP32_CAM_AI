@@ -47,7 +47,7 @@ class CameraRecorder:
         self._writer_lock = threading.Lock()
         self._running = False
         self._write_thread: Optional[threading.Thread] = None
-        self._q: Deque[Tuple[int, np.ndarray]] = deque()
+        self._q: Deque[Tuple[int, np.ndarray]] = deque(maxlen=60)
         self._q_lock = threading.Lock()
 
         self._last_written_ts = 0
@@ -77,12 +77,13 @@ class CameraRecorder:
             while self._ring and self._ring[0][0] < cutoff:
                 _, old = self._ring.popleft()
                 self._ring_bytes -= int(old.nbytes) + 16
+                del old
             # trim by RAM
             cap_bytes = self.cfg.max_ram_mb * 1024 * 1024
             while self._ring and self._ring_bytes > cap_bytes:
                 _, old = self._ring.popleft()
                 self._ring_bytes -= int(old.nbytes) + 16
-
+                del old
         # enqueue to writer if recording
         if self._running:
             with self._q_lock:

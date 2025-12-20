@@ -44,7 +44,7 @@ class AppSettings:
     models_dir: Path = Path("models")
     output_dir: Path = Path("recordings")
     logs_dir: Path = Path("logs")
-    detect_interval_ms: int = 100
+    detect_interval_ms: int = 500
     thresh_yolo: float = 0.35
     prebuffer_ms: int = 3000
     yolo_url: Optional[str] = None

@@ -3,13 +3,14 @@
     "project_root": "F:/share/code/Python/GPTsynch",
     "input_roots": [
         "C:\\Users\\stellaris\\Documents\\PlatformIO\\Projects\\ESP32_CAM_AI\\AI",
-        "C:\\Users\\stellaris\\Documents\\PlatformIO\\Projects\\ESP32_CAM_AI\\AI\\stream",
-        "C:\\Users\\stellaris\\Documents\\PlatformIO\\Projects\\ESP32_CAM_AI\\AI\\detectors"
+        "C:\\Users\\stellaris\\Documents\\PlatformIO\\Projects\\ESP32_CAM_AI\\AI\\UI",
+        "C:\\Users\\stellaris\\Documents\\PlatformIO\\Projects\\ESP32_CAM_AI\\AI\\detection",
+        "C:\\Users\\stellaris\\Documents\\PlatformIO\\Projects\\ESP32_CAM_AI\\AI\\enrollment"
     ],
     "include_children": false,
     "packs_dir": "C:\\Users\\stellaris\\Documents\\PlatformIO\\Projects\\ESP32_CAM_AI",
     "baselines_dir": "C:\\Users\\stellaris\\Documents\\PlatformIO\\Projects\\ESP32_CAM_AI",
-    "model_backend": "selenium",
+    "model_backend": "pyautogui-simulated",
     "ignore_patterns": [
         ".git/",
         "__pycache__/",

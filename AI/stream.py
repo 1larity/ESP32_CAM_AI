@@ -66,6 +66,7 @@ class StreamCapture:
                 self._sleep_with_cancel(1.0)
 
     def _run_opencv(self, url: str) -> bool:
+        cap = None
         self.last_backend = "cv-ffmpeg"
         # Basic auth inline if provided
         u = url
@@ -75,18 +76,22 @@ class StreamCapture:
             if p.port:
                 netloc += f":{p.port}"
             u = urlunparse((p.scheme, netloc, p.path, p.params, p.query, p.fragment))
-        cap = cv.VideoCapture(u, cv.CAP_FFMPEG)
-        ok, frame = cap.read()
-        if not ok or frame is None:
-            cap.release()
-            return False
-        self._offer(True, frame, monotonic_ms())
-        while not self._stop.is_set():
+        try:
+            cap = cv.VideoCapture(u, cv.CAP_FFMPEG)
             ok, frame = cap.read()
             if not ok or frame is None:
-                break
+                cap.release()
+                return False
             self._offer(True, frame, monotonic_ms())
-        cap.release()
+            while not self._stop.is_set():
+                ok, frame = cap.read()
+                if not ok or frame is None:
+                    break
+                self._offer(True, frame, monotonic_ms())
+            cap.release()
+        finally:
+            if cap is not None:
+                cap.release()
         return True
 
     def _run_mjpeg(self, url: str) -> bool:

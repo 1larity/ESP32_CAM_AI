@@ -2,9 +2,7 @@
 # Build UI, state and signal wiring for CameraWidget.
 
 from __future__ import annotations
-
 from PySide6 import QtCore, QtWidgets
-
 from detectors import DetectorThread, DetectorConfig
 from recorder import PrebufferRecorder
 from presence import PresenceBus
