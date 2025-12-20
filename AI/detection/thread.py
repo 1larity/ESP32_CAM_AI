@@ -92,9 +92,12 @@ class DetectorThread(QtCore.QThread):
         with self._lock:
             self._latest = (bgr.copy(), ts_ms)
 
-    def stop(self) -> None:
+    def stop(self, wait_ms: int = 0) -> None:
         self._stop.set()
-
+        if wait_ms and self.isRunning() and QtCore.QThread.currentThread() != self:
+            if not self.wait(wait_ms):
+                print(f"[Detector:{getattr(self, 'name', '')}] stop(): thread did not exit within {wait_ms} ms")
+   
     def run(self) -> None:
         next_due = 0
         while not self._stop.is_set():

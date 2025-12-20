@@ -1,26 +1,26 @@
 # discovery_dialog.py
-# Local subnet scanner for ESP32-CAM. Looks for /api/status (preferred),
-# then /status, /stream, / on ports 80 and 81.
+# Local subnet scanner for ESP32-CAM.
+# Fast concurrent scan; detects cameras by /api/status (200 OK or 401 Unauthorized),
+# with fallbacks to /ping, /, and :81/stream.
 
 from __future__ import annotations
+
 import socket
 import threading
-import queue
-from typing import Set
-from PySide6 import QtWidgets, QtCore
+from typing import Set, Optional, Dict, Any
+
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from PySide6 import QtWidgets, QtCore, QtGui
 from PySide6.QtCore import Signal, Slot
+
 import requests
 
 
 def _guess_primary_ipv4() -> str | None:
-    """
-    Try to get the primary IPv4 by opening a UDP socket to a public IP.
-    This avoids platform-specific APIs.
-    """
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.settimeout(0.2)
-        # We don't actually connect, just use routing table
         s.connect(("8.8.8.8", 80))
         ip = s.getsockname()[0]
         s.close()
@@ -30,74 +30,115 @@ def _guess_primary_ipv4() -> str | None:
 
 
 def _default_subnet() -> str:
-    """
-    Try to guess the local /24 from the primary IPv4; fall back to 192.168.1.x.
-    """
     ip = _guess_primary_ipv4()
     if not ip:
         return "192.168.1."
-
     parts = ip.split(".")
     if len(parts) != 4:
         return "192.168.1."
-
-    # assume /24
     return ".".join(parts[:3]) + "."
 
 
-def _probe_ip(ip: str, timeout: float = 0.5) -> dict | None:
+def _probe_ip(ip: str, timeout: float = 0.35) -> Dict[str, Any] | None:
     """
-    Probe an IP for ESP32-CAM HTTP endpoints.
+    Probe an IP for ESP32-CAM endpoints without knowing credentials.
 
-    Returns a dict with:
+    Hit criteria:
+      - /api/status returns 200 OR 401  -> HIT (via=status)
+      - /ping returns "pong"           -> HIT (via=ping)
+
+    Returns:
       {
         "ip": str,
+        "hit": bool,
+        "hit_via": "status" | "ping",
         "auth": bool,
-        "stream_ok": bool | None,
-        "ping": bool,
+        "status": "-" | "ok" | "401",
+        "ping": None | True | False,        # None = not tried
+        "stream": "-" | "ok" | "401",
         "notes": str,
       }
-    or None if nothing useful was detected.
+    or None if nothing detected.
     """
     base = f"http://{ip}"
     session = requests.Session()
-    session.headers.update({"User-Agent": "ESP32-CAM-Discovery/1.0"})
-    # 1) /ping
+    session.headers.update({"User-Agent": "ESP32-CAM-Discovery/2.0"})
+
+    info: Dict[str, Any] = {
+        "ip": ip,
+        "hit": False,
+        "hit_via": "",
+        "auth": False,
+        "status": "-",      # "-", "ok", "401"
+        "ping": None,       # None=not tried, True/False=tried
+        "stream": "-",      # "-", "ok", "401"
+        "notes": "",
+    }
+
+    # 1) Prefer /api/status (your discovery endpoint)
     try:
-        r = session.get(f"{base}/ping", timeout=timeout)
-        text = (r.text or "").strip().lower()
-        if r.status_code == 200 and text.startswith("pong"):
-            info = {
-                "ip": ip,
-                "ping": True,
-                "auth": False,
-                "stream_ok": None,
-                "notes": "",
-            }
-            # try / (may 401 if auth on)
+        r = session.get(f"{base}/api/status", timeout=timeout)
+        if r.status_code == 200:
+            info["hit"] = True
+            info["hit_via"] = "status"
+            info["status"] = "ok"
             try:
-                r2 = session.get(base + "/", timeout=timeout)
-                if r2.status_code == 401:
-                    info["auth"] = True
-                    info["notes"] = "Auth required"
-                elif r2.status_code == 200:
-                    info["notes"] = "HTTP OK"
+                js = r.json()
+                name = js.get("name") or js.get("cam") or js.get("id")
+                info["notes"] = f"status OK ({name})" if name else "status OK"
             except Exception:
-                pass
-            # try :81/stream
-            try:
-                r3 = session.get(f"{base}:81/stream", timeout=timeout, stream=True)
-                if r3.status_code == 200:
-                    info["stream_ok"] = True
-                elif r3.status_code == 401:
-                    info["auth"] = True
-            except Exception:
-                pass
-            return info
+                info["notes"] = "status OK"
+        elif r.status_code == 401:
+            # Unknown creds, but still a discovered camera
+            info["hit"] = True
+            info["hit_via"] = "status"
+            info["status"] = "401"
+            info["auth"] = True
+            info["notes"] = "status auth required"
     except Exception:
         pass
 
-    return None
+    # 2) Fallback: /ping
+    if not info["hit"]:
+        info["ping"] = False
+        try:
+            r = session.get(f"{base}/ping", timeout=timeout)
+            text = (r.text or "").strip().lower()
+            if r.status_code == 200 and text.startswith("pong"):
+                info["hit"] = True
+                info["hit_via"] = "ping"
+                info["ping"] = True
+                info["notes"] = "pong"
+        except Exception:
+            pass
+
+    if not info["hit"]:
+        return None
+
+    # 3) Enrich: check / (may 401)
+    try:
+        r2 = session.get(f"{base}/", timeout=timeout)
+        if r2.status_code == 401:
+            info["auth"] = True
+            if not info["notes"]:
+                info["notes"] = "auth required"
+        elif r2.status_code == 200 and not info["notes"]:
+            info["notes"] = "HTTP OK"
+    except Exception:
+        pass
+
+    # 4) Enrich: try :81/stream (may 200 or 401)
+    try:
+        r3 = session.get(f"{base}:81/stream", timeout=timeout, stream=True)
+        if r3.status_code == 200:
+            info["stream"] = "ok"
+        elif r3.status_code == 401:
+            info["stream"] = "401"
+            info["auth"] = True
+    except Exception:
+        pass
+
+    return info
 
 
 class DiscoveryDialog(QtWidgets.QDialog):
@@ -105,17 +146,18 @@ class DiscoveryDialog(QtWidgets.QDialog):
     progress = Signal(int, int, str)
     # label
     addItemSignal = Signal(str)
-    # scan finished (renamed earlier to avoid clashing with QDialog.done())
+    # scan finished
     scanFinished = Signal()
 
-    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
+    def __init__(self, app_cfg, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
+        self.app_cfg = app_cfg
+
         self.setWindowTitle("Discover ESP32-CAMs")
-        self.resize(600, 400)
+        self.resize(720, 420)
 
         self._stop_flag = threading.Event()
         self._thread: threading.Thread | None = None
-        self._queue: "queue.Queue[str]" = queue.Queue()
         self._seen_ips: Set[str] = set()
 
         self._build_ui()
@@ -127,9 +169,45 @@ class DiscoveryDialog(QtWidgets.QDialog):
         layout = QtWidgets.QVBoxLayout(self)
 
         form = QtWidgets.QFormLayout()
+
         self.subnet_edit = QtWidgets.QLineEdit(self)
         self.subnet_edit.setText(_default_subnet())
         form.addRow("Subnet (x.x.x.)", self.subnet_edit)
+
+        rng_row = QtWidgets.QHBoxLayout()
+        self.start_spin = QtWidgets.QSpinBox(self)
+        self.start_spin.setRange(1, 254)
+        self.start_spin.setValue(1)
+        rng_row.addWidget(QtWidgets.QLabel("Start host", self))
+        rng_row.addWidget(self.start_spin)
+
+        self.end_spin = QtWidgets.QSpinBox(self)
+        self.end_spin.setRange(1, 254)
+        self.end_spin.setValue(254)
+        rng_row.addWidget(QtWidgets.QLabel("End host", self))
+        rng_row.addWidget(self.end_spin)
+
+        rng_wrap = QtWidgets.QWidget(self)
+        rng_wrap.setLayout(rng_row)
+        form.addRow("Range", rng_wrap)
+
+        perf_row = QtWidgets.QHBoxLayout()
+        self.workers_spin = QtWidgets.QSpinBox(self)
+        self.workers_spin.setRange(1, 256)
+        self.workers_spin.setValue(64)
+        perf_row.addWidget(QtWidgets.QLabel("Workers", self))
+        perf_row.addWidget(self.workers_spin)
+
+        self.timeout_ms_spin = QtWidgets.QSpinBox(self)
+        self.timeout_ms_spin.setRange(50, 5000)
+        self.timeout_ms_spin.setValue(350)
+        perf_row.addWidget(QtWidgets.QLabel("Timeout (ms)", self))
+        perf_row.addWidget(self.timeout_ms_spin)
+
+        perf_wrap = QtWidgets.QWidget(self)
+        perf_wrap.setLayout(perf_row)
+        form.addRow("Performance", perf_wrap)
+
         layout.addLayout(form)
 
         self.scan_button = QtWidgets.QPushButton("Scan", self)
@@ -160,8 +238,8 @@ class DiscoveryDialog(QtWidgets.QDialog):
     @Slot()
     def _on_scan_clicked(self) -> None:
         if self._thread is not None and self._thread.is_alive():
-            # Stop existing scan
             self._stop_flag.set()
+            self.scan_button.setEnabled(False)
             return
 
         subnet = self.subnet_edit.text().strip()
@@ -173,6 +251,17 @@ class DiscoveryDialog(QtWidgets.QDialog):
             )
             return
 
+        start_h = int(self.start_spin.value())
+        end_h = int(self.end_spin.value())
+        if end_h < start_h:
+            QtWidgets.QMessageBox.warning(
+                self, "Invalid range", "End host must be >= start host."
+            )
+            return
+
+        workers = int(self.workers_spin.value())
+        timeout_s = float(self.timeout_ms_spin.value()) / 1000.0
+
         self._stop_flag.clear()
         self._seen_ips.clear()
         self.list_widget.clear()
@@ -180,26 +269,54 @@ class DiscoveryDialog(QtWidgets.QDialog):
         self.scan_button.setText("Stop")
         self.scan_button.setEnabled(True)
 
-        self._thread = threading.Thread(target=self._scan_worker, args=(subnet,))
+        self._thread = threading.Thread(
+            target=self._scan_worker, args=(subnet, start_h, end_h, workers, timeout_s)
+        )
         self._thread.daemon = True
         self._thread.start()
 
-    def _scan_worker(self, subnet: str) -> None:
-        """
-        Run in a background thread; probes IPs.
-        """
-        total = 254
-        for idx, host in enumerate(range(1, 255), start=1):
-            if self._stop_flag.is_set():
-                break
+    def _scan_worker(
+        self, subnet: str, start_h: int, end_h: int, workers: int, timeout_s: float
+    ) -> None:
+        hosts = list(range(start_h, end_h + 1))
+        total = len(hosts)
 
-            ip = f"{subnet}{host}"
-            self.progress.emit(idx, total, ip)
+        submitted = 0
+        completed = 0
 
-            info = _probe_ip(ip)
-            if info is not None:
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            fut_to_ip = {}
+            for host in hosts:
+                if self._stop_flag.is_set():
+                    break
+                ip = f"{subnet}{host}"
+                fut = ex.submit(_probe_ip, ip, timeout_s)
+                fut_to_ip[fut] = ip
+                submitted += 1
+                self.progress.emit(submitted, total, ip)
+
+            for fut in as_completed(list(fut_to_ip.keys())):
+                if self._stop_flag.is_set():
+                    break
+                ip = fut_to_ip[fut]
+                completed += 1
+                self.progress.emit(completed, total, ip)
+
+                try:
+                    info = fut.result()
+                except Exception:
+                    continue
+                if info is None:
+                    continue
+
+                ip2 = info["ip"]
+                if ip2 in self._seen_ips:
+                    continue
+                self._seen_ips.add(ip2)
+
                 self.addItemSignal.emit(
-                    f"{info['ip']}  ping={info['ping']}  auth={info['auth']}  stream={info['stream_ok']}  {info['notes']}"
+                    f"{ip2}  via={info['hit_via']}  status={info['status']}  "
+                    f"auth={info['auth']}  stream={info['stream']}  {info['notes']}"
                 )
 
         self.scanFinished.emit()
@@ -229,12 +346,8 @@ class DiscoveryDialog(QtWidgets.QDialog):
             )
             return
 
-        # The label starts with the IP
         label = item.text()
         ip = label.split()[0]
-
-        # Just close with Accepted and stash IP in a property so the caller
-        # can read it (or extend later with more data).
         self.selected_ip = ip
         self.accept()
 

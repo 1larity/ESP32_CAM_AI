@@ -60,7 +60,7 @@ class CameraWidget(QtWidgets.QWidget):
     def stop(self) -> None:
         self._frame_timer.stop()
         self._capture.stop()
-        self._detector.stop()
+        self._detector.stop(wait_ms=2000)
         self._recorder.close()
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # type: ignore[override]

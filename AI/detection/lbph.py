@@ -5,6 +5,7 @@ from pathlib import Path
 import os
 import json
 import time
+import traceback
 
 import cv2
 import numpy as np
@@ -145,10 +146,60 @@ def train_lbph_models(face_dir: str, models_dir: str) -> bool:
     except Exception:
         return False
 
-    rec.train(imgs, np.array(labels_arr))
     models_path = Path(models_dir)
     models_path.mkdir(parents=True, exist_ok=True)
-    rec.write(str(models_path / "lbph_faces.xml"))
-    with open(models_path / "labels_faces.json", "w", encoding="utf-8") as fp:
-        json.dump(label_map, fp, indent=2)
-    return True
+
+    tmp_model = models_path / "lbph_faces.xml.tmp"
+    final_model = models_path / "lbph_faces.xml"
+    tmp_labels = models_path / "labels_faces.json.tmp"
+    final_labels = models_path / "labels_faces.json"
+
+    try:
+        if len(imgs) != len(labels_arr):
+            raise ValueError(
+                f"LBPH training: image/label count mismatch {len(imgs)} != {len(labels_arr)}"
+            )
+
+        # Ensure labels are int32 1D
+        labels_np = np.asarray(labels_arr, dtype=np.int32).reshape(-1)
+
+        # Train can throw cv2.error / ValueError depending on inputs
+        rec.train(imgs, labels_np)
+
+        # Atomic model write
+        try:
+            if tmp_model.exists():
+                tmp_model.unlink()
+        except Exception:
+            pass
+        rec.write(str(tmp_model))
+        os.replace(str(tmp_model), str(final_model))
+
+        # Atomic labels write
+        try:
+            if tmp_labels.exists():
+                tmp_labels.unlink()
+        except Exception:
+            pass
+        with open(tmp_labels, "w", encoding="utf-8") as fp:
+            json.dump(label_map, fp, indent=2)
+        os.replace(str(tmp_labels), str(final_labels))
+
+        return True
+
+    except Exception:
+        # Clean up temp files, but never crash caller
+        try:
+            if tmp_model.exists():
+                tmp_model.unlink()
+        except Exception:
+            pass
+        try:
+            if tmp_labels.exists():
+                tmp_labels.unlink()
+        except Exception:
+            pass
+
+        print("[LBPH] training failed:")
+        print(traceback.format_exc())
+        return False
