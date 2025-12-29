@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 from typing import Optional
+from urllib.parse import urlparse
+import requests
 
-from PySide6 import QtGui, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
 from settings import AppSettings, CameraSettings
 
@@ -12,6 +14,24 @@ from .camera_widget_init import init_camera_widget
 from .camera_widget_video import attach_video_handlers
 from .camera_widget_overlays import attach_overlay_handlers
 from .camera_widget_view import attach_view_handlers
+
+# Map framesize enum -> (label, width, height) per esp32-camera sensor.h
+FRAME_SIZES = {
+    0: ("96x96", 96, 96),
+    1: ("QQVGA", 160, 120),
+    2: ("QCIF", 176, 144),
+    3: ("HQVGA", 240, 176),
+    4: ("240x240", 240, 240),
+    5: ("QVGA", 320, 240),
+    6: ("CIF", 352, 288),
+    7: ("HVGA", 480, 320),
+    8: ("VGA", 640, 480),
+    9: ("SVGA", 800, 600),
+    10: ("XGA", 1024, 768),
+    11: ("SXGA", 1280, 1024),
+    12: ("UXGA", 1600, 1200),
+    13: ("QXGA", 2048, 1536),
+}
 
 
 class CameraWidget(QtWidgets.QWidget):
@@ -66,6 +86,67 @@ class CameraWidget(QtWidgets.QWidget):
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # type: ignore[override]
         self.stop()
         event.accept()
+
+    # ------------------------------------------------------------------ #
+    # Info dialog
+    # ------------------------------------------------------------------ #
+
+    def _api_status_url(self) -> str | None:
+        """
+        Build the API status URL for this camera based on its stream URL.
+        Defaults to http://<host>:80/api/status.
+        """
+        parsed = urlparse(self.cam_cfg.effective_url())
+        host = parsed.hostname
+        if not host:
+            return None
+        port = 80
+        return f"http://{host}:{port}/api/status"
+
+    def _show_info(self) -> None:
+        url = self._api_status_url()
+        if not url:
+            QtWidgets.QMessageBox.warning(
+                self, "Camera Info", "Cannot determine API URL for this camera."
+            )
+            return
+
+        try:
+            auth = None
+            if self.cam_cfg.user and self.cam_cfg.password:
+                auth = requests.auth.HTTPBasicAuth(self.cam_cfg.user, self.cam_cfg.password)
+            resp = requests.get(url, auth=auth, timeout=3)
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Camera Info",
+                f"Failed to fetch camera info from {url}:\n{e}",
+            )
+            return
+
+        ip = data.get("ip") or urlparse(url).hostname or "n/a"
+        fs_code = data.get("framesize")
+        fs_name, fs_w, fs_h = FRAME_SIZES.get(fs_code, (str(fs_code), None, None))
+        ptz = data.get("ptz") or {}
+        pan = ptz.get("pan", "n/a")
+        tilt = ptz.get("tilt", "n/a")
+
+        text = (
+            f"IP: {ip}\n"
+            f"Framesize: {fs_name} (code {fs_code})\n"
+            f"Pixels: {fs_w if fs_w else 'n/a'} x {fs_h if fs_h else 'n/a'}\n"
+            f"PTZ: pan={pan}, tilt={tilt}"
+        )
+
+        dlg = QtWidgets.QMessageBox(self)
+        dlg.setWindowTitle(f"Camera Info - {self.cam_cfg.name}")
+        dlg.setIcon(QtWidgets.QMessageBox.Icon.Information)
+        dlg.setText(text)
+        dlg.setStandardButtons(QtWidgets.QMessageBox.StandardButton.Ok)
+        dlg.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
+        dlg.exec()
 
 
 # Keep module-level attachment too (harmless with the class guard above).

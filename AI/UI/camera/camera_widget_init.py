@@ -51,6 +51,9 @@ def init_camera_widget(self) -> None:
     self.btn_lock.setText("Lock")
     self.btn_lock.setCheckable(True)
 
+    self.btn_info = QtWidgets.QToolButton()
+    self.btn_info.setText("Info")
+
     # Overlays menu
     self.btn_overlay_menu = QtWidgets.QToolButton()
     self.btn_overlay_menu.setText("Overlays")
@@ -105,6 +108,7 @@ def init_camera_widget(self) -> None:
     tb.addWidget(self.btn_overlay_menu)
     tb.addStretch(1)
     tb.addWidget(self.btn_view_menu)
+    tb.addWidget(self.btn_info)
     tb.addWidget(self.btn_lock)
 
     root_layout.addLayout(tb)
@@ -171,6 +175,7 @@ def init_camera_widget(self) -> None:
 
     # Lock
     self.btn_lock.toggled.connect(self._on_lock_toggled)
+    self.btn_info.clicked.connect(self._show_info)
 
     # AI + overlay menu actions
     self.act_ai_enabled.toggled.connect(self._on_ai_toggled)
