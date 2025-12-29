@@ -40,7 +40,7 @@ class EventsPane(QtWidgets.QWidget):
                         cam = rec.get("camera")
                         ev = rec.get("event")
                         typ = rec.get("type")
-                        self.list.addItem(f"{cam} — {ev} {typ} @ {ts}")
+                        self.list.addItem(f"{cam} - {ev} {typ} @ {ts}")
                     self._pos[p] = fp.tell()
             except FileNotFoundError:
                 self._pos.pop(p, None)

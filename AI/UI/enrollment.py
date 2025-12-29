@@ -78,7 +78,6 @@ class EnrollDialog(QtWidgets.QDialog):
         self.btn_start.setEnabled(False)
         self.btn_stop.setEnabled(True)
         self.status_label.setText("Collecting samples…")
-
     @Slot()
     def _on_stop(self) -> None:
         self.ctrl.stop()
@@ -98,14 +97,8 @@ class EnrollDialog(QtWidgets.QDialog):
         if err:
             self.status_label.setText(f"Error: {err}")
         else:
-            self.status_label.setText(
-                f"Enrolling '{name}' – existing {existing}, "
-                f"this session {got}/{need}"
-            )
-
+            self.status_label.setText(f"Enrolling '{name}' - existing {existing}, this session {got}/{need}")
         if done:
             self.btn_start.setEnabled(True)
             self.btn_stop.setEnabled(False)
-            self.status_label.setText(
-                f"Done {got}/{need}. Training saved models to models/lbphfaces.xml"
-            )
+            self.status_label.setText(f"Done {got}/{need}. Training saved models to models/lbphfaces.xml")

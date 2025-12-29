@@ -2,7 +2,7 @@
 # Base-path aware settings. Paths are anchored to the AI folder (this file's parent).
 from __future__ import annotations
 from dataclasses import dataclass, field, asdict
-from typing import List, Optional
+from typing import Dict, List, Optional
 from pathlib import Path
 import json
 import os
@@ -49,6 +49,9 @@ class AppSettings:
     prebuffer_ms: int = 3000
     yolo_url: Optional[str] = None
     haar_url: Optional[str] = None
+    window_geometry: Optional[str] = None  # hex-encoded QByteArray
+    window_state: Optional[str] = None     # hex-encoded QByteArray
+    window_geometries: Dict[str, List[int]] = field(default_factory=dict)  # cam_name -> [x,y,w,h,maximized]
     cameras: List[CameraSettings] = field(default_factory=list)
 
 def load_settings() -> AppSettings:
@@ -60,11 +63,14 @@ def load_settings() -> AppSettings:
             models_dir=Path(raw.get("models_dir", "models")),
             output_dir=Path(raw.get("output_dir", "recordings")),
             logs_dir=Path(raw.get("logs_dir", "logs")),
-            detect_interval_ms=int(raw.get("detect_interval_ms", 100)),
+            detect_interval_ms=int(raw.get("detect_interval_ms", 500)),
             thresh_yolo=float(raw.get("thresh_yolo", 0.35)),
             prebuffer_ms=int(raw.get("prebuffer_ms", 3000)),
             yolo_url=raw.get("yolo_url"),
             haar_url=raw.get("haar_url"),
+            window_geometry=raw.get("window_geometry"),
+            window_state=raw.get("window_state"),
+            window_geometries=raw.get("window_geometries", {}) or {},
             cameras=cams
         )
     else:
@@ -88,6 +94,9 @@ def save_settings(cfg: AppSettings):
         "prebuffer_ms": cfg.prebuffer_ms,
         "yolo_url": cfg.yolo_url,
         "haar_url": cfg.haar_url,
+        "window_geometry": cfg.window_geometry,
+        "window_state": cfg.window_state,
+        "window_geometries": cfg.window_geometries,
         "cameras": [asdict(c) for c in cfg.cameras],
     }
     with SETTINGS_FILE.open("w", encoding="utf-8") as fp:

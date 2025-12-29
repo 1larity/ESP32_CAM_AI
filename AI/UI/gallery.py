@@ -38,7 +38,7 @@ def _thumb(path: Path, max_size: int = 160) -> QtGui.QPixmap:
 class GalleryDialog(QtWidgets.QDialog):
     def __init__(self, folder: Path, parent=None):
         super().__init__(parent)
-        self.setWindowTitle(f"Gallery — {Path(folder).name}")
+        self.setWindowTitle(f"Gallery - {Path(folder).name}")
         self.folder = Path(folder)
 
         # Icon + spacing constants so we can derive min size for 5x5 grid

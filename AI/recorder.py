@@ -30,6 +30,9 @@ class PrebufferRecorder:
     def start(self):
         if self.writer is not None:
             return
+        if self.size is None:
+            # No frames seen yet; bail out instead of crashing
+            return
         ensure_dir(self.out_dir)
         fname = f"{self.cam_name}_{timestamp_name()}.avi"
         path = str(self.out_dir / fname)

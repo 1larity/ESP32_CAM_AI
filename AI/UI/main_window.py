@@ -12,6 +12,7 @@ from UI.events_pane import EventsPane
 from UI.discovery_dialog import DiscoveryDialog
 from UI.ip_cam_dialog import AddIpCameraDialog
 from UI.camera_widget import CameraWidget
+from UI.face_tuner import FaceRecTunerDialog
 from enrollment import get_enrollment_service
 
 
@@ -59,6 +60,18 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self.dock_events.hide()
 
+        # Restore geometry/state if persisted
+        if getattr(self.app_cfg, "window_geometry", None):
+            try:
+                self.restoreGeometry(QtCore.QByteArray.fromHex(self.app_cfg.window_geometry.encode()))
+            except Exception:
+                pass
+        if getattr(self.app_cfg, "window_state", None):
+            try:
+                self.restoreState(QtCore.QByteArray.fromHex(self.app_cfg.window_state.encode()))
+            except Exception:
+                pass
+
         self._build_menus()
         self._load_initial_cameras()
 
@@ -78,6 +91,16 @@ class MainWindow(QtWidgets.QMainWindow):
         sub.setWindowTitle(cam_cfg.name)
         # remove Qt icon from cam windows
         sub.setWindowIcon(QtGui.QIcon())
+
+        # Restore per-camera geometry/state if available
+        geom_rec = (self.app_cfg.window_geometries or {}).get(cam_cfg.name)
+        if geom_rec and len(geom_rec) >= 5:
+            x, y, w_geom, h_geom, maximized = geom_rec[:5]
+            if maximized:
+                sub.showMaximized()
+            else:
+                sub.setGeometry(x, y, w_geom, h_geom)
+
         self.mdi.addSubWindow(sub)
 
         # remember our QMdiSubWindow in the widget so fit_window_to_video
@@ -157,6 +180,21 @@ class MainWindow(QtWidgets.QMainWindow):
             w = sub.widget()
             if isinstance(w, CameraWidget):
                 w.stop()
+        try:
+            self.app_cfg.window_geometry = bytes(self.saveGeometry().toHex()).decode()
+            self.app_cfg.window_state = bytes(self.saveState().toHex()).decode()
+            # Persist per-camera MDI subwindow geometry/state
+            geo: dict[str, list[int]] = {}
+            for sub in self.mdi.subWindowList():
+                try:
+                    name = sub.windowTitle()
+                    r = sub.geometry()
+                    geo[name] = [r.x(), r.y(), r.width(), r.height(), int(sub.isMaximized())]
+                except Exception:
+                    continue
+            self.app_cfg.window_geometries = geo
+        except Exception:
+            pass
         save_settings(self.app_cfg)
         super().closeEvent(event)
 
@@ -223,10 +261,13 @@ class MainWindow(QtWidgets.QMainWindow):
             lambda: open_folder_or_warn(self, self.app_cfg.logs_dir)
         )
         m_tools.addSeparator()
-        m_tools.addAction("Fetch default models…").triggered.connect(
+        m_tools.addAction("Fetch default models").triggered.connect(
             lambda: ModelManager.fetch_defaults(self, self.app_cfg)
         )
-        act_rebuild_faces = QtGui.QAction("Rebuild face model from disk…", self)
+        m_tools.addAction("Face recognizer tuner").triggered.connect(
+            lambda: FaceRecTunerDialog(str(self.app_cfg.models_dir), self).exec()
+        )
+        act_rebuild_faces = QtGui.QAction("Rebuild face model from disk", self)
         act_rebuild_faces.triggered.connect(
             lambda: self._start_face_rebuild("Rebuild Face Model")
         )
