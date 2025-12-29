@@ -101,6 +101,11 @@ class StartupDialog(QtWidgets.QDialog):
         self.lbl_status = QtWidgets.QLabel("Preparing...", self.overlay)
         self.lbl_status.setObjectName("status")
         self.lbl_status.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        self.lbl_status.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Preferred,
+        )
+        self.lbl_status.setWordWrap(True)
         overlay_lay.addWidget(
             self.lbl_status, alignment=QtCore.Qt.AlignmentFlag.AlignCenter
         )
@@ -108,7 +113,10 @@ class StartupDialog(QtWidgets.QDialog):
         self.pb = QtWidgets.QProgressBar(self.overlay)
         self.pb.setRange(0, max(1, len(self.cams)))
         self.pb.setValue(0)
-        self.pb.setMinimumWidth(260)
+        self.pb.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
         overlay_lay.addWidget(
             self.pb, alignment=QtCore.Qt.AlignmentFlag.AlignCenter
         )
@@ -125,8 +133,15 @@ class StartupDialog(QtWidgets.QDialog):
                 QtCore.Qt.TransformationMode.SmoothTransformation,
             )
             self.img.setPixmap(pm)
-        # Keep overlay covering the image area so text/progress stay centered
-        self.overlay.setGeometry(0, 0, self.width(), self.height())
+        self._update_overlay_geometry()
+
+    def _update_overlay_geometry(self) -> None:
+        """Keep overlay full-size and status wide enough to avoid cropping."""
+        w = self.width()
+        h = self.height()
+        self.overlay.setGeometry(0, 0, w, h)
+        self.lbl_status.setMinimumWidth(int(w * 0.9))
+        self.pb.setMinimumWidth(int(w * 0.85))
 
     def showEvent(self, event: QtGui.QShowEvent) -> None:
         super().showEvent(event)
