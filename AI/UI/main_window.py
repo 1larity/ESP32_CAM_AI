@@ -31,7 +31,7 @@ class _FaceRebuildWorker(QtCore.QObject):
 
 
 class MainWindow(QtWidgets.QMainWindow):
-    def __init__(self, app_cfg: AppSettings):
+    def __init__(self, app_cfg: AppSettings, *, load_on_init: bool = True):
         super().__init__()
         self.app_cfg = app_cfg
 
@@ -54,6 +54,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # Events pane dock
         self.events_pane = EventsPane(self.app_cfg.logs_dir, parent=self)
         self.dock_events = QtWidgets.QDockWidget("Events", self)
+        self.dock_events.setObjectName("eventsDock")
         self.dock_events.setWidget(self.events_pane)
         self.addDockWidget(
             QtCore.Qt.DockWidgetArea.RightDockWidgetArea, self.dock_events
@@ -73,7 +74,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 pass
 
         self._build_menus()
-        self._load_initial_cameras()
+        if load_on_init:
+            self._load_initial_cameras()
 
     # ------------------------------------------------------------------ #
     # camera windows

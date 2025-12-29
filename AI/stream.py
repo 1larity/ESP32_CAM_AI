@@ -14,6 +14,12 @@ import requests
 from settings import CameraSettings
 from utils import monotonic_ms
 
+# Silence noisy OpenCV FFmpeg warnings (e.g., intermittent stream timeouts).
+try:
+    cv.utils.logging.setLogLevel(cv.utils.logging.LOG_LEVEL_ERROR)
+except Exception:
+    pass
+
 
 class StreamCapture:
     def __init__(self, cam: CameraSettings):
