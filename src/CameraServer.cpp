@@ -19,6 +19,7 @@ struct ResolutionOption {
 static Preferences camPrefs;
 static const char* CAM_NS  = "camera";
 static const char* KEY_RES = "res";
+static const char* KEY_FLASH = "flash";
 
 static const ResolutionOption resolutionOptions[] = {
   {FRAMESIZE_UXGA,  "UXGA",   1600,1200},
@@ -49,6 +50,14 @@ static const ResolutionOption resolutionOptions[] = {
 #define VSYNC_GPIO_NUM    25
 #define HREF_GPIO_NUM     23
 #define PCLK_GPIO_NUM     22
+#define FLASH_LED_PIN      4
+
+static bool g_flash_on = false;
+
+static void setFlash(bool on) {
+  g_flash_on = on;
+  digitalWrite(FLASH_LED_PIN, on ? HIGH : LOW);
+}
 
 void setupCamera() {
   camera_config_t config = {};
@@ -92,16 +101,21 @@ void setupCamera() {
     return;
   }
 
+  pinMode(FLASH_LED_PIN, OUTPUT);
+  digitalWrite(FLASH_LED_PIN, LOW);
+
   // Apply persisted framesize if present
   framesize_t fs = config.frame_size;
   camPrefs.begin(CAM_NS, true);
   if (camPrefs.isKey(KEY_RES)) {
     fs = (framesize_t)camPrefs.getUChar(KEY_RES, (uint8_t)config.frame_size);
   }
+  bool flash_on = camPrefs.getBool(KEY_FLASH, false);
   camPrefs.end();
 
   sensor_t* s = esp_camera_sensor_get();
   if (s) s->set_framesize(s, fs);
+  setFlash(flash_on);
 
   // Start port-81 MJPEG stream server
   startStreamServer();
@@ -177,6 +191,7 @@ static void renderCameraPage(AsyncWebServerRequest* request) {
           "<button class='btn' onclick=\"fetch('/ptz/step?dx=-10')\">Left</button> "
           "<button class='btn' onclick=\"fetch('/ptz/step?dx=10')\">Right</button>"
           "</div>";
+  html += "<div class='row'><label><input id='flash' type='checkbox'> Flash</label></div>";
   html += "</div>";
 
   // Live video
@@ -191,8 +206,15 @@ static void renderCameraPage(AsyncWebServerRequest* request) {
 
   // Status block
   html += "<div class='panel'><h3>Status</h3><pre id='st'>Loading…</pre></div>"
-          "<script>fetch('/api/status').then(r=>r.json()).then(j=>{"
-          "document.getElementById('st').textContent=JSON.stringify(j,null,2);});</script>";
+          "<script>"
+          "function applyStatus(j){"
+          "document.getElementById('st').textContent=JSON.stringify(j,null,2);"
+          "if(j && j.flash!==undefined){document.getElementById('flash').checked=!!j.flash;}"
+          "}"
+          "function setFlash(on){fetch('/api/flash?on='+(on?1:0)).then(()=>fetch('/api/status').then(r=>r.json()).then(applyStatus));}"
+          "fetch('/api/status').then(r=>r.json()).then(applyStatus);"
+          "document.getElementById('flash').addEventListener('change',e=>setFlash(e.target.checked));"
+          "</script>";
 
   html += "</div></body></html>";
   request->send(200, "text/html", html);
@@ -229,6 +251,18 @@ void startCameraServer() {
     req->send(200, "text/plain", "OK");
   });
 
+  // Flash control (on/off)
+  srv.on("/api/flash", HTTP_GET, [](AsyncWebServerRequest* req){
+    if (!isAuthorized(req)) { send401(req); return; }
+    if (!req->hasParam("on")) { req->send(400, "text/plain", "Missing ?on="); return; }
+    bool on = req->getParam("on")->value().toInt() ? true : false;
+    setFlash(on);
+    Preferences prefs; prefs.begin(CAM_NS, false);
+    prefs.putBool(KEY_FLASH, on);
+    prefs.end();
+    req->send(200, "application/json", on ? "{\"flash\":1}" : "{\"flash\":0}");
+  });
+
   // Composite status JSON for page
   srv.on("/api/status", HTTP_GET, [](AsyncWebServerRequest* req){
     if (!isAuthorized(req)) { send401(req); return; }
@@ -241,10 +275,11 @@ void startCameraServer() {
       "{"
       "\"ip\":\"%s\","
       "\"framesize\":%d,"
+      "\"flash\":%d,"
       "\"ptz\":{\"pan\":%d,\"tilt\":%d}"
       "}",
       WiFi.localIP().toString().c_str(),
-      (int)fs, pan, tilt);
+      (int)fs, g_flash_on ? 1 : 0, pan, tilt);
     req->send(200, "application/json", buf);
   });
 }
