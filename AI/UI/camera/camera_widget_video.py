@@ -1,4 +1,4 @@
-# AI/UI/camera_widget_video.py
+# camera/camera_widget_video.py
 # Video polling + detection handling + overlay rendering (with cached overlay layer)
 
 from __future__ import annotations
@@ -9,8 +9,8 @@ from PySide6.QtCore import Slot
 from detectors import DetectionPacket
 from enrollment import EnrollmentService
 from utils import qimage_from_bgr
-from UI.overlays import draw_overlays
-from UI.overlay_stats import FpsCounter, compute_yolo_stats, YoloStats
+from ..overlays import draw_overlays
+from ..overlay_stats import FpsCounter, compute_yolo_stats, YoloStats
 
 
 def attach_video_handlers(cls) -> None:
@@ -290,10 +290,10 @@ def attach_video_handlers(cls) -> None:
     def _toggle_recording(self) -> None:
         if self._recorder.writer is None:
             self._recorder.start()
-            self.btn_rec.setText("■ STOP")
+            self.btn_rec.setText("ƒ-ÿ STOP")
         else:
             self._recorder.stop()
-            self.btn_rec.setText("● REC")
+            self.btn_rec.setText("ƒ-? REC")
 
     # ----------------------------
     # Bind injected methods

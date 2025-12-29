@@ -1,5 +1,5 @@
 from .graphics_view import GraphicsView
-from .camera_widget import CameraWidget
+from .camera import CameraWidget
 from .main_window import MainWindow
 from .overlays import OverlayFlags, draw_overlays
 from .events_pane import EventsPane

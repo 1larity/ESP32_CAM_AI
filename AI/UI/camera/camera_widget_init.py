@@ -1,4 +1,4 @@
-# camera_widget_init.py
+# camera/camera_widget_init.py
 # Build UI, state and signal wiring for CameraWidget.
 
 from __future__ import annotations
@@ -8,8 +8,8 @@ from recorder import PrebufferRecorder
 from presence import PresenceBus
 from stream import StreamCapture
 from enrollment import EnrollmentService
-from UI.graphics_view import GraphicsView
-from UI.overlays import OverlayFlags
+from ..graphics_view import GraphicsView
+from ..overlays import OverlayFlags
 
 
 def init_camera_widget(self) -> None:
@@ -30,7 +30,7 @@ def init_camera_widget(self) -> None:
     # Toolbar
     # ------------------------------------------------------------------
     tb = QtWidgets.QHBoxLayout()
-    self.btn_rec = QtWidgets.QPushButton("● REC")
+    self.btn_rec = QtWidgets.QPushButton("ƒ-? REC")
     self.btn_snap = QtWidgets.QPushButton("Snapshot")
 
     # View menu (replaces Fit / 100% / Fit win buttons)

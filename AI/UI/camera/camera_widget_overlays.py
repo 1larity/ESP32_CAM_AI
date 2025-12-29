@@ -1,4 +1,4 @@
-# camera_widget_overlays.py
+# camera/camera_widget_overlays.py
 # AI / overlay toggle helpers.
 
 from __future__ import annotations
@@ -74,7 +74,7 @@ def attach_overlay_handlers(cls) -> None:
         """Toggle bottom-left stats overlay (FPS + counts)."""
         self._overlays.stats = bool(checked)
         self._invalidate_overlay_cache()
-        
+
     # Bind helpers
     cls._on_ai_toggled = _on_ai_toggled
     cls._on_ai_yolo_toggled = _on_ai_yolo_toggled

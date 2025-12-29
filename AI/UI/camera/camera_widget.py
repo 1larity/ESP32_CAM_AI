@@ -1,4 +1,4 @@
-# camera_widget.py
+# camera/camera_widget.py
 from __future__ import annotations
 
 from typing import Optional
@@ -8,10 +8,10 @@ from PySide6 import QtGui, QtWidgets
 from settings import AppSettings, CameraSettings
 
 # Helper initialiser / attach functions
-from UI.camera_widget_init import init_camera_widget
-from UI.camera_widget_video import attach_video_handlers
-from UI.camera_widget_overlays import attach_overlay_handlers
-from UI.camera_widget_view import attach_view_handlers
+from .camera_widget_init import init_camera_widget
+from .camera_widget_video import attach_video_handlers
+from .camera_widget_overlays import attach_overlay_handlers
+from .camera_widget_view import attach_view_handlers
 
 
 class CameraWidget(QtWidgets.QWidget):

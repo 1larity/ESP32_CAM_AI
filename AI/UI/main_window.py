@@ -11,7 +11,7 @@ from UI.image_manager import ImageManagerDialog
 from UI.events_pane import EventsPane
 from UI.discovery_dialog import DiscoveryDialog
 from UI.ip_cam_dialog import AddIpCameraDialog
-from UI.camera_widget import CameraWidget
+from UI.camera import CameraWidget
 from UI.face_tuner import FaceRecTunerDialog
 from enrollment import get_enrollment_service
 
