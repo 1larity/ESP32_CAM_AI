@@ -8,7 +8,7 @@ from PySide6 import QtCore, QtGui
 from PySide6.QtCore import Slot
 from detectors import DetectionPacket
 from enrollment import EnrollmentService
-from utils import qimage_from_bgr
+from utils import qimage_from_bgr, debug, monotonic_ms
 from ..overlays import draw_overlays
 from ..overlay_stats import FpsCounter, compute_yolo_stats, YoloStats
 
@@ -118,13 +118,28 @@ def attach_video_handlers(cls) -> None:
 
         self._last_bgr = frame
 
-        # Single copy for downstream consumers (recorder + detector) to avoid extra allocations.
-        shared_frame = frame.copy()
+        # Frame profiling (throttled) to spot stalls without spamming logs.
+        if not hasattr(self, "_frame_stats"):
+            self._frame_stats = {"last_ts": ts_ms, "next_log": monotonic_ms() + 2000}
+        dt = ts_ms - self._frame_stats["last_ts"]
+        self._frame_stats["last_ts"] = ts_ms
+        now_ms = monotonic_ms()
+        if now_ms >= self._frame_stats["next_log"]:
+            fps = 1000.0 / dt if dt > 0 else 0.0
+            debug(
+                f"[Cam {self.cam_cfg.name}] frame dt={dt}ms (~{fps:.1f} fps) "
+                f"rec={'on' if self._recorder.writer else 'off'} "
+                f"ai={'on' if getattr(self, '_ai_enabled', False) else 'off'} "
+                f"backend={getattr(self._capture, 'last_backend', '?')}"
+            )
+            self._frame_stats["next_log"] = now_ms + 2000
 
-        self._recorder.on_frame(shared_frame, ts_ms)
+        # Hand off frame to recorder (recorder buffers a copy internally).
+        self._recorder.on_frame(frame, ts_ms)
 
+        # Send the latest frame to the detector thread; detector copies on its side.
         if getattr(self, "_ai_enabled", False):
-            self._detector.submit_frame(self.cam_cfg.name, shared_frame, ts_ms)
+            self._detector.submit_frame(self.cam_cfg.name, frame, ts_ms)
 
         # Use last detection packet for a short window to reduce overlay flicker
         pkt_for_frame: Optional[DetectionPacket] = None

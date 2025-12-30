@@ -5,9 +5,17 @@ from PySide6  import QtWidgets
 from settings import load_settings
 from UI.main_window import MainWindow
 from UI.startup import StartupDialog
+import utils
+from utils import DebugMode
+
+# Enable debug (prints + logs to AI/logs/debug.log)
+#Only print: utils.DEBUG_MODE = DebugMode.PRINT
+#Only log to file: utils.DEBUG_MODE = DebugMode.LOG
+#Disable: utils.DEBUG_MODE = DebugMode.OFF
+utils.DEBUG_MODE = DebugMode.BOTH
 
 # Application version shown on the startup screen.
-APP_VERSION = "0.1.3"
+APP_VERSION = "0.1.4"
 
 
 def main():

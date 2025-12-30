@@ -1,14 +1,15 @@
 from __future__ import annotations
 import os
 import threading
+from collections import deque
 import time
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Optional
 import cv2
 import numpy as np
 from PySide6 import QtCore
 from PySide6.QtCore import Signal, Slot
-from utils import monotonic_ms
+from utils import monotonic_ms, debug
 from .core import run_yolo
 from .lbph import load_lbph, run_faces
 from .packet import DetectionPacket
@@ -41,9 +42,10 @@ class DetectorThread(QtCore.QThread):
         super().__init__()
         self.cfg = cfg
         self.name = name
-        self._latest: Optional[Tuple[np.ndarray, int]] = None
-        self._lock = threading.RLock()
+        # Latest frames handed off from UI thread; deque(maxlen=1) keeps only newest.
+        self._frames = deque(maxlen=1)
         self._stop = threading.Event()
+        self._profile_next_ms = 0
 
         self.models_dir = os.path.dirname(self.cfg.yolo_model)
 
@@ -89,8 +91,8 @@ class DetectorThread(QtCore.QThread):
                 f"got {len(args)} positional arguments"
             )
 
-        with self._lock:
-            self._latest = (bgr.copy(), ts_ms)
+        # Drop older frames; detector only needs the most recent snapshot.
+        self._frames.append((bgr, ts_ms))
 
     def stop(self, wait_ms: int = 0) -> None:
         self._stop.set()
@@ -107,12 +109,11 @@ class DetectorThread(QtCore.QThread):
                 continue
             next_due = now + self.cfg.interval_ms
 
-            with self._lock:
-                snap = self._latest
-            if snap is None:
+            if not self._frames:
                 continue
 
-            bgr, ts_ms = snap
+            snap_bgr, ts_ms = self._frames.pop()
+            bgr = snap_bgr.copy()
             H, W = bgr.shape[:2]
             pkt = DetectionPacket(self.name, ts_ms, (W, H))
             t0 = monotonic_ms()
@@ -140,5 +141,16 @@ class DetectorThread(QtCore.QThread):
             t2 = monotonic_ms()
             pkt.timing_ms["yolo"] = int(t1 - t0)
             pkt.timing_ms["faces"] = int(t2 - t1)
+
+            # Throttled profiling to help diagnose stalls without flooding logs.
+            now_ms = monotonic_ms()
+            if now_ms >= self._profile_next_ms:
+                debug(
+                    f"[Detector {self.name}] yolo={len(pkt.yolo)} pets={len(pkt.pets)} "
+                    f"faces={len(pkt.faces)} "
+                    f"t_yolo={pkt.timing_ms.get('yolo', 0)}ms "
+                    f"t_faces={pkt.timing_ms.get('faces', 0)}ms"
+                )
+                self._profile_next_ms = now_ms + 2000
 
             self.resultsReady.emit(pkt)
