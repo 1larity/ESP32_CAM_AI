@@ -42,7 +42,7 @@ void setup() {
 }
 
 void loop() {
-//  if (!g_inConfigPortal && g_otaReady) {
+  if (!g_inConfigPortal && g_otaReady) {
       handleOTA();
- // }
+  }
 }
