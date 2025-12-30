@@ -49,6 +49,7 @@ checkpoints/
 #training data
 *.jpg
 *.png
+!AI/loadscreen.png
 
 # App artifacts (recordings, enrollment images)
 ai/recordings/*.mp4
