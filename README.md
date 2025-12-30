@@ -2,7 +2,7 @@ ESP32_CAM_AI
 
 ![Load screen](AI/loadscreen.png)
 
-ESP32_CAM_AI is an ESP32-CAM (OV2640) firmware with a web UI (port 80), MJPEG stream server (port 81), PTZ controls, Wi-Fi/auth management, OTA updates, and a companion desktop viewer (PySide6/Qt) for multi-camera monitoring, recording, and optional CV overlays.
+ESP32_CAM_AI gives home and small-office DIYers a ready-to-use security kit: the ESP32-CAM firmware handles Wi-Fi, web viewing, PTZ, flash, and OTA safety, while the Python desktop app watches multiple cameras, records clips, and adds light AI detection without cloud lock-in.
 
 Highlights
 - Web UI: resolution selector, PTZ step buttons, flash toggle/level slider, Wi-Fi/auth setup with stream token for cross-port embed.
@@ -44,3 +44,13 @@ Repo Structure
 License
 - CC BY-NC 4.0: https://creativecommons.org/licenses/by-nc/4.0/
 - Non-commercial use only; attribute with a link back to this repository.
+
+Python Desktop App User Guide
+- Install: Python 3.12 recommended. `py -3.12 -m pip install numpy opencv-python requests pygame PySide6`.
+- Launch: `python AI/mdi_app.py`. Camera list and settings persist in `ai/cameras.json`.
+- Add cameras: Tools -> Scan For Cameras (uses `/api/advertise`) or Add/Manage and enter name, IP/host, and credentials/token if you set auth on the camera.
+- View and control: each camera opens in its own window with live view. PTZ/flash controls remain in the camera web UI; use the viewer for monitoring and status.
+- Recording: click Record to start per-camera capture (AVI/MJPG on Windows, MP4V fallback). Files save under `ai/recordings/`, auto-adjusted to even dimensions.
+- AI overlays: toggle YOLO/face/pet detection from the camera window toolbar (AI dropdown). Overlays stay local; no cloud required.
+- Logs and events: presence/dog events are written under `ai/logs/events_<name>_<host>.log` and shown in the Events sidebar.
+- Tips: if streams stall, lower resolution in the camera web UI; verify `/api/status` and `/stream` load in a browser when adding a camera; keep firmware and app on the same LAN for best latency.
