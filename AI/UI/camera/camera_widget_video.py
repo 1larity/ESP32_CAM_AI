@@ -118,12 +118,13 @@ def attach_video_handlers(cls) -> None:
 
         self._last_bgr = frame
 
-        # Copy for recorder
-        self._recorder.on_frame(frame.copy(), ts_ms)
+        # Single copy for downstream consumers (recorder + detector) to avoid extra allocations.
+        shared_frame = frame.copy()
 
-        # Copy for detector
+        self._recorder.on_frame(shared_frame, ts_ms)
+
         if getattr(self, "_ai_enabled", False):
-            self._detector.submit_frame(self.cam_cfg.name, frame.copy(), ts_ms)
+            self._detector.submit_frame(self.cam_cfg.name, shared_frame, ts_ms)
 
         # Use last detection packet for a short window to reduce overlay flicker
         pkt_for_frame: Optional[DetectionPacket] = None
