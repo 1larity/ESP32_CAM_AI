@@ -7,21 +7,21 @@
   "prebuffer_ms": 3000,
   "yolo_url": null,
   "haar_url": null,
-  "window_geometry": "01d9d0cb0003000000000212000000b0000008bb0000048e00000212000000cf000008bb0000048e00000000000000000a0000000212000000cf000008bb0000048e",
-  "window_state": "000000ff00000000fd00000001000000010000011b000003aafc0200000001fb00000014006500760065006e007400730044006f0063006b0100000016000003aa0000009100ffffff0000058b000003aa00000004000000040000000800000008fc00000000",
+  "window_geometry": "01d9d0cb0003000000000212000000b0000009b80000048e00000212000000cf000009b80000048e00000000000000000a0000000212000000cf000009b80000048e",
+  "window_state": "000000ff00000000fd00000001000000010000011b000003aafc0200000001fb00000014006500760065006e007400730044006f0063006b0100000016000003aa0000009100ffffff00000688000003aa00000004000000040000000800000008fc00000000",
   "window_geometries": {
     "cam1": [
-      715,
       0,
-      713,
-      938,
+      0,
+      833,
+      689,
       0
     ],
     "Cam-2": [
+      834,
       0,
-      0,
-      715,
-      938,
+      830,
+      688,
       0
     ]
   },
@@ -31,14 +31,22 @@
       "stream_url": "http://192.168.1.130:81/stream",
       "user": "sysadm",
       "token": null,
-      "password_enc": "fuwXEIAo64C8UNwZsxFZ2RzDhTQl9e2qRE8iPSFzMN9+ov6i2y05kvT9IvUkIWyURNbNmfA="
+      "flash_mode": "off",
+      "flash_level": 1023,
+      "flash_auto_target": 80,
+      "flash_auto_hyst": 15,
+      "password_enc": "q6SLH5bDfFXaqV8kC7ODQHQzbNXqJ7S0h6Uz2NAo+933nA/T3zGdQfEiWrYSV6Y6dT406H4="
     },
     {
       "name": "Cam-2",
       "stream_url": "http://192.168.1.132:81/stream",
       "user": "sysadm",
       "token": null,
-      "password_enc": "CXc6TBRpwy7huI6GjDvSOHv9sp0NSPRy2WtP61YAVsWRc3k0vIIP7zEt4s25Wvi0uQSwzJ8="
+      "flash_mode": "off",
+      "flash_level": 512,
+      "flash_auto_target": 80,
+      "flash_auto_hyst": 15,
+      "password_enc": "Yq/lY/ZTPIcZiRSZR57Ez5n2ikZZOAzEIuJbp/LUKcx6Pd98nVdmS5i4gMGaBJWGd+Oxgps="
     }
   ]
 }

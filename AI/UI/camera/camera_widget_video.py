@@ -4,6 +4,9 @@
 from __future__ import annotations
 import time
 from typing import Optional, Tuple
+from urllib.parse import urlparse
+import requests
+import numpy as np
 from PySide6 import QtCore, QtGui
 from PySide6.QtCore import Slot
 from detectors import DetectionPacket
@@ -117,6 +120,10 @@ def attach_video_handlers(cls) -> None:
             return
 
         self._last_bgr = frame
+
+        # Auto-flash adjustment (throttled) based on scene brightness.
+        if getattr(self, "_flash_mode", "off").lower() == "auto":
+            self._flash_auto_adjust(frame, ts_ms)
 
         # Frame profiling (throttled) to spot stalls without spamming logs.
         if not hasattr(self, "_frame_stats"):
@@ -329,3 +336,110 @@ def attach_video_handlers(cls) -> None:
 
     cls._snapshot = _snapshot
     cls._toggle_recording = _toggle_recording
+
+    # ----------------------------
+    # Flash / LED controls
+    # ----------------------------
+
+    def _flash_api_url(self) -> Optional[str]:
+        parsed = urlparse(self.cam_cfg.effective_url())
+        host = parsed.hostname
+        if not host:
+            return None
+        return f"http://{host}:80/api/flash"
+
+    def _send_flash(self, *, level: Optional[int] = None, on: Optional[bool] = None) -> None:
+        url = self._flash_api_url()
+        if not url:
+            return
+        params = {}
+        if level is not None:
+            params["level"] = max(0, min(1023, int(level)))
+        if on is not None:
+            params["on"] = 1 if on else 0
+        try:
+            auth = None
+            if self.cam_cfg.user and self.cam_cfg.password:
+                auth = requests.auth.HTTPBasicAuth(self.cam_cfg.user, self.cam_cfg.password)
+            requests.get(url, params=params, auth=auth, timeout=2)
+        except Exception:
+            pass
+
+    def _update_flash_label(self, val: int) -> None:
+        if hasattr(self, "lbl_flash"):
+            self.lbl_flash.setText(str(val))
+
+    def _on_flash_mode_changed(self, text: str) -> None:
+        mode = text.lower()
+        self._flash_mode = mode
+        self.cam_cfg.flash_mode = mode
+        self.s_flash.setEnabled(mode != "off")
+        if mode == "off":
+            self._send_flash(on=False, level=0)
+        elif mode == "on":
+            self._send_flash(level=self._flash_level)
+        elif mode == "auto":
+            # Kick off with current level; auto adjust will take over.
+            self._send_flash(level=self._flash_level)
+            self._flash_next_auto_ms = 0
+
+    def _on_flash_level_changed(self, val: int) -> None:
+        self._flash_level = int(val)
+        self.cam_cfg.flash_level = int(val)
+        self._update_flash_label(self._flash_level)
+        if getattr(self, "_flash_mode", "off").lower() == "on":
+            self._send_flash(level=self._flash_level)
+
+    def _apply_flash_mode(self, initial: bool = False) -> None:
+        # Sync UI and push current state to camera.
+        mode = getattr(self, "_flash_mode", "off").lower()
+        idx_map = {"off": 0, "on": 1, "auto": 2}
+        idx = idx_map.get(mode, 0)
+        if self.cb_flash.currentIndex() != idx:
+            self.cb_flash.blockSignals(True)
+            self.cb_flash.setCurrentIndex(idx)
+            self.cb_flash.blockSignals(False)
+        self.s_flash.setEnabled(mode != "off")
+        self._update_flash_label(self._flash_level)
+        if not initial:
+            # Trigger mode handler to push state
+            self._on_flash_mode_changed(self.cb_flash.currentText())
+
+    def _flash_auto_adjust(self, frame, ts_ms: int) -> None:
+        # Throttle adjustments
+        if ts_ms < getattr(self, "_flash_next_auto_ms", 0):
+            return
+        self._flash_next_auto_ms = ts_ms + 800
+
+        gray_mean = float(np.mean(frame))
+        target = getattr(self, "_flash_auto_target", 80)
+        hyst = getattr(self, "_flash_auto_hyst", 15)
+        level = self._flash_level
+
+        # Hysteresis band
+        if gray_mean < target - hyst:
+            new_level = min(1023, level + 32)
+        elif gray_mean > target + hyst:
+            new_level = max(0, level - 32)
+        else:
+            return
+
+        if new_level == level:
+            return
+
+        self._flash_level = new_level
+        self.cam_cfg.flash_level = new_level
+        # Update slider silently
+        self.s_flash.blockSignals(True)
+        self.s_flash.setValue(new_level)
+        self.s_flash.blockSignals(False)
+        self._update_flash_label(new_level)
+        self._send_flash(level=new_level)
+
+    cls._flash_api_url = _flash_api_url
+    cls._send_flash = _send_flash
+    cls._update_flash_label = _update_flash_label
+    cls._on_flash_mode_changed = _on_flash_mode_changed
+    cls._on_flash_level_changed = _on_flash_level_changed
+    cls._flash_auto_adjust = _flash_auto_adjust
+    cls._apply_flash_mode = _apply_flash_mode

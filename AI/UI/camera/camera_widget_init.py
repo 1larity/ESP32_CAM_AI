@@ -101,9 +101,26 @@ def init_camera_widget(self) -> None:
 
     self.btn_ai_menu.setMenu(self.menu_ai)
 
+    # Flash controls
+    self.cb_flash = QtWidgets.QComboBox()
+    self.cb_flash.addItems(["Off", "On", "Auto"])
+    self.s_flash = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+    self.s_flash.setRange(0, 1023)
+    self.s_flash.setSingleStep(8)
+    self.s_flash.setFixedWidth(120)
+    self.lbl_flash = QtWidgets.QLabel("0")
+    flash_wrap = QtWidgets.QHBoxLayout()
+    flash_wrap.setContentsMargins(0, 0, 0, 0)
+    flash_wrap.addWidget(QtWidgets.QLabel("LED"))
+    flash_wrap.addWidget(self.cb_flash)
+    flash_wrap.addWidget(self.s_flash)
+    flash_wrap.addWidget(self.lbl_flash)
+
     # Assemble toolbar (same order as before, but with View menu)
     tb.addWidget(self.btn_rec)
     tb.addWidget(self.btn_snap)
+    tb.addSpacing(12)
+    tb.addLayout(flash_wrap)
     tb.addSpacing(12)
     tb.addWidget(self.btn_ai_menu)
     tb.addWidget(self.btn_overlay_menu)
@@ -128,6 +145,12 @@ def init_camera_widget(self) -> None:
     self._last_pkt_ts = 0
     # keep overlays around a bit to avoid flicker
     self._overlay_ttl_ms = 750  # matches previous CameraWidget
+    # Flash state
+    self._flash_mode = getattr(self.cam_cfg, "flash_mode", "off") or "off"
+    self._flash_level = int(getattr(self.cam_cfg, "flash_level", 512) or 512)
+    self._flash_auto_target = int(getattr(self.cam_cfg, "flash_auto_target", 80) or 80)
+    self._flash_auto_hyst = int(getattr(self.cam_cfg, "flash_auto_hyst", 15) or 15)
+    self._flash_next_auto_ms = 0
 
     # Prebuffer recorder: per-camera
     self._recorder = PrebufferRecorder(
@@ -172,6 +195,8 @@ def init_camera_widget(self) -> None:
     # Recording / snapshot
     self.btn_rec.clicked.connect(self._toggle_recording)
     self.btn_snap.clicked.connect(self._snapshot)
+    self.cb_flash.currentTextChanged.connect(self._on_flash_mode_changed)
+    self.s_flash.valueChanged.connect(self._on_flash_level_changed)
 
     # View menu actions -> view helpers (provided by camera_widget_view.py)
     self.act_view_fit.triggered.connect(self.fit_to_window)
@@ -203,3 +228,14 @@ def init_camera_widget(self) -> None:
     self._overlays.faces = True
     self._overlays.pets = True
     self._overlays.stats = True
+
+    # Initialize flash controls/state
+    self.s_flash.blockSignals(True)
+    self.cb_flash.blockSignals(True)
+    self.s_flash.setValue(self._flash_level)
+    self.lbl_flash.setText(str(self._flash_level))
+    mode_idx = {"off": 0, "on": 1, "auto": 2}.get(self._flash_mode.lower(), 0)
+    self.cb_flash.setCurrentIndex(mode_idx)
+    self.cb_flash.blockSignals(False)
+    self.s_flash.blockSignals(False)
+    self._apply_flash_mode(initial=True)

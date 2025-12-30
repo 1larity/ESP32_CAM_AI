@@ -26,6 +26,10 @@ class CameraSettings:
     user: Optional[str] = None
     password: Optional[str] = None
     token: Optional[str] = None
+    flash_mode: str = "off"         # off | on | auto
+    flash_level: int = 512          # 0-1023
+    flash_auto_target: int = 80     # desired brightness (0-255)
+    flash_auto_hyst: int = 15       # hysteresis band (0-255)
 
     @classmethod
     def from_ip(cls, name: str, host: str, user: Optional[str] = None,
@@ -74,6 +78,10 @@ def load_settings() -> AppSettings:
                     user=c.get("user"),
                     password=pwd,
                     token=c.get("token"),
+                    flash_mode=c.get("flash_mode", "off"),
+                    flash_level=int(c.get("flash_level", 512)),
+                    flash_auto_target=int(c.get("flash_auto_target", 80)),
+                    flash_auto_hyst=int(c.get("flash_auto_hyst", 15)),
                 )
             )
         cfg = AppSettings(

@@ -94,16 +94,16 @@ class MainWindow(QtWidgets.QMainWindow):
         # remove Qt icon from cam windows
         sub.setWindowIcon(QtGui.QIcon())
 
-        # Restore per-camera geometry/state if available
+        self.mdi.addSubWindow(sub)
+
+        # Restore per-camera geometry/state if available (re-apply after addSubWindow)
         geom_rec = (self.app_cfg.window_geometries or {}).get(cam_cfg.name)
         if geom_rec and len(geom_rec) >= 5:
-            x, y, w_geom, h_geom, maximized = geom_rec[:5]
+            x, y, w_geom, h_geom, maximized = map(int, geom_rec[:5])
             if maximized:
                 sub.showMaximized()
             else:
                 sub.setGeometry(x, y, w_geom, h_geom)
-
-        self.mdi.addSubWindow(sub)
 
         # remember our QMdiSubWindow in the widget so fit_window_to_video
         # can correctly size the outer frame
