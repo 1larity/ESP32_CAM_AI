@@ -7,7 +7,7 @@ from UI.main_window import MainWindow
 from UI.startup import StartupDialog
 
 # Application version shown on the startup screen.
-APP_VERSION = "0.1.1"
+APP_VERSION = "0.1.2"
 
 
 def main():

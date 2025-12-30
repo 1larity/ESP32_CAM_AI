@@ -36,7 +36,8 @@ def run_yolo(
         o = out[0]
         out = o.T if o.shape[0] in (84, 85) else o
 
-    boxes: List[Tuple[float, float, float, float]] = []
+    # Collect detections before NMS
+    boxes_xywh: List[Tuple[int, int, int, int]] = []
     scores: List[float] = []
     ids: List[int] = []
 
@@ -55,29 +56,36 @@ def run_yolo(
             conf = float(det[5]) if det.shape[0] > 5 else 0.0
         if conf < conf_thresh:
             continue
-        boxes.append((float(cx), float(cy), float(w), float(h)))
+        boxes_xywh.append((int(cx), int(cy), int(w), int(h)))
         scores.append(conf)
         ids.append(c)
 
     yolo_boxes: List[DetBox] = []
     pet_boxes: List[DetBox] = []
 
-    for (cx, cy, w, h), conf, cid in zip(boxes, scores, ids):
-        if cid not in COCO_ID_TO_NAME:
-            continue
-        cx0 = (cx - dx) / r
-        cy0 = (cy - dy) / r
-        w0 = w / r
-        h0 = h / r
-        x1 = max(0, int(cx0 - w0 / 2))
-        y1 = max(0, int(cy0 - h0 / 2))
-        x2 = min(W - 1, int(cx0 + w0 / 2))
-        y2 = min(H - 1, int(cy0 + h0 / 2))
-        label = COCO_ID_TO_NAME[cid]
-        box = DetBox(label, float(conf), (x1, y1, x2, y2))
-        yolo_boxes.append(box)
-        if label in ("cat", "dog"):
-            pet_boxes.append(box)
+    # Apply NMS to reduce duplicate boxes; cv2 expects [x, y, w, h]
+    nms_indices = cv2.dnn.NMSBoxes(boxes_xywh, scores, conf_thresh, nms_thresh)
+    if len(nms_indices) > 0:
+        for idx in np.array(nms_indices).reshape(-1):
+            cx, cy, w, h = boxes_xywh[idx]
+            conf = scores[idx]
+            cid = ids[idx]
+            if cid not in COCO_ID_TO_NAME:
+                continue
+
+            cx0 = (cx - dx) / r
+            cy0 = (cy - dy) / r
+            w0 = w / r
+            h0 = h / r
+            x1 = max(0, int(cx0 - w0 / 2))
+            y1 = max(0, int(cy0 - h0 / 2))
+            x2 = min(W - 1, int(cx0 + w0 / 2))
+            y2 = min(H - 1, int(cy0 + h0 / 2))
+            label = COCO_ID_TO_NAME[cid]
+            box = DetBox(label, float(conf), (x1, y1, x2, y2))
+            yolo_boxes.append(box)
+            if label in ("cat", "dog"):
+                pet_boxes.append(box)
 
     elapsed_ms = int((time.monotonic() - start) * 1000.0)
     return yolo_boxes, pet_boxes, elapsed_ms
