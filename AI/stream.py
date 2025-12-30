@@ -25,7 +25,8 @@ class StreamCapture:
     def __init__(self, cam: CameraSettings):
         self.cam = cam
         self._stop = threading.Event()
-        self._q: "queue.Queue[Tuple[bool, Optional[np.ndarray], int]]" = queue.Queue(maxsize=2)
+        # Keep only the freshest frame; drop stale frames aggressively to avoid UI stalls.
+        self._q: "queue.Queue[Tuple[bool, Optional[np.ndarray], int]]" = queue.Queue(maxsize=1)
         self._t: Optional[threading.Thread] = None
         self.last_backend = "init"
 

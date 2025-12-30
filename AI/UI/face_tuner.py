@@ -20,6 +20,13 @@ class FaceRecTunerDialog(QtWidgets.QDialog):
         self.s_conf.setTickPosition(QtWidgets.QSlider.TickPosition.TicksBelow)
         layout.addRow("Accept confidence (%):", self._wrap_slider(self.s_conf))
 
+        self.s_presence = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self.s_presence.setRange(1000, 15000)
+        self.s_presence.setValue(int(self.params.presence_ttl_ms))
+        self.s_presence.setTickInterval(500)
+        self.s_presence.setTickPosition(QtWidgets.QSlider.TickPosition.TicksBelow)
+        layout.addRow("Presence grace (ms):", self._wrap_slider(self.s_presence))
+
         self.s_roi = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
         self.s_roi.setRange(64, 256)
         self.s_roi.setValue(int(self.params.roi_size))
@@ -64,6 +71,7 @@ class FaceRecTunerDialog(QtWidgets.QDialog):
 
     def _collect_and_save(self):
         self.params.accept_conf = float(self.s_conf.value())
+        self.params.presence_ttl_ms = int(self.s_presence.value())
         self.params.roi_size = int(self.s_roi.value())
         self.params.min_face_px = int(self.s_min.value())
         self.params.eq_hist = bool(self.cb_eq.isChecked())

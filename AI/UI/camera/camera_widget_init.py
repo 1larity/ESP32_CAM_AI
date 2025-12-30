@@ -8,6 +8,7 @@ from recorder import PrebufferRecorder
 from presence import PresenceBus
 from stream import StreamCapture
 from enrollment import EnrollmentService
+from face_params import FaceParams
 from ..graphics_view import GraphicsView
 from ..overlays import OverlayFlags
 
@@ -137,7 +138,13 @@ def init_camera_widget(self) -> None:
     )
 
     # Presence logging bus (per camera)
-    self._presence = PresenceBus(self.cam_cfg.name, self.app_cfg.logs_dir)
+    # Presence logging bus (per camera) with configurable grace period
+    face_params = FaceParams.load(str(self.app_cfg.models_dir))
+    self._presence = PresenceBus(
+        self.cam_cfg.name,
+        self.app_cfg.logs_dir,
+        ttl_ms=getattr(face_params, "presence_ttl_ms", 6000),
+    )
 
     # Detector thread – use app-level settings (as in original)
     det_cfg = DetectorConfig.from_app(self.app_cfg)

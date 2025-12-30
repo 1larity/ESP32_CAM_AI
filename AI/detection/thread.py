@@ -14,6 +14,15 @@ from .core import run_yolo
 from .lbph import load_lbph, run_faces
 from .packet import DetectionPacket
 
+# Limit concurrent YOLO runs to reduce CPU contention across cameras.
+YOLO_SEMAPHORE = threading.Semaphore(1)
+
+# Keep OpenCV from spinning up many worker threads; helps reduce contention.
+try:
+    cv2.setNumThreads(1)
+except Exception:
+    pass
+
 
 @dataclass
 class DetectorConfig:
@@ -46,6 +55,8 @@ class DetectorThread(QtCore.QThread):
         self._frames = deque(maxlen=1)
         self._stop = threading.Event()
         self._profile_next_ms = 0
+        self._backoff_until = 0
+        self._last_yolo = None  # (ts_ms, yolo_boxes, pet_boxes)
 
         self.models_dir = os.path.dirname(self.cfg.yolo_model)
 
@@ -104,6 +115,9 @@ class DetectorThread(QtCore.QThread):
         next_due = 0
         while not self._stop.is_set():
             now = monotonic_ms()
+            if now < getattr(self, "_backoff_until", 0):
+                time.sleep(0.05)
+                continue
             if now < next_due:
                 time.sleep(max(0, (next_due - now) / 1000.0))
                 continue
@@ -116,18 +130,38 @@ class DetectorThread(QtCore.QThread):
             bgr = snap_bgr.copy()
             H, W = bgr.shape[:2]
             pkt = DetectionPacket(self.name, ts_ms, (W, H))
-            t0 = monotonic_ms()
+            t_start = monotonic_ms()
+            t0 = t_start
+
+            # Reuse last YOLO results if we must skip and they are fresh.
+            reuse_yolo = False
+            yolo_skipped = False
 
             if self._net is not None:
-                try:
-                    yolo_boxes, pet_boxes, t_yolo = run_yolo(
-                        self._net, bgr, self.cfg.yolo_conf, self.cfg.yolo_nms
-                    )
-                    pkt.yolo.extend(yolo_boxes)
-                    pkt.pets.extend(pet_boxes)
-                    pkt.timing_ms["yolo_core"] = t_yolo
-                except Exception as e:
-                    print(f"[Detector:{self.name}] YOLO error: {e}")
+                # Try to acquire YOLO slot; wait briefly before skipping.
+                acquired = YOLO_SEMAPHORE.acquire(timeout=0.05)
+                if acquired:
+                    try:
+                        yolo_boxes, pet_boxes, t_yolo = run_yolo(
+                            self._net, bgr, self.cfg.yolo_conf, self.cfg.yolo_nms
+                        )
+                        pkt.yolo.extend(yolo_boxes)
+                        pkt.pets.extend(pet_boxes)
+                        pkt.timing_ms["yolo_core"] = t_yolo
+                        self._last_yolo = (ts_ms, yolo_boxes, pet_boxes)
+                    except Exception as e:
+                        print(f"[Detector:{self.name}] YOLO error: {e}")
+                    finally:
+                        YOLO_SEMAPHORE.release()
+                else:
+                    pkt.timing_ms["yolo_core"] = 0  # skipped to avoid contention
+                    yolo_skipped = True
+                    if self._last_yolo:
+                        last_ts, last_yolo_boxes, last_pet_boxes = self._last_yolo
+                        if ts_ms - last_ts <= 2000:
+                            reuse_yolo = True
+                            pkt.yolo.extend(last_yolo_boxes)
+                            pkt.pets.extend(last_pet_boxes)
 
             t1 = monotonic_ms()
 
@@ -142,6 +176,14 @@ class DetectorThread(QtCore.QThread):
             pkt.timing_ms["yolo"] = int(t1 - t0)
             pkt.timing_ms["faces"] = int(t2 - t1)
 
+            # Dynamic backoff: if run exceeded 400ms, pause detection briefly.
+            t_run = t2 - t_start
+            if t_run > 400:
+                self._backoff_until = t2 + min(t_run, 1500)
+            elif yolo_skipped:
+                # If we skipped YOLO due to contention, yield a short pause.
+                self._backoff_until = t2 + 150
+
             # Throttled profiling to help diagnose stalls without flooding logs.
             now_ms = monotonic_ms()
             if now_ms >= self._profile_next_ms:
@@ -149,7 +191,8 @@ class DetectorThread(QtCore.QThread):
                     f"[Detector {self.name}] yolo={len(pkt.yolo)} pets={len(pkt.pets)} "
                     f"faces={len(pkt.faces)} "
                     f"t_yolo={pkt.timing_ms.get('yolo', 0)}ms "
-                    f"t_faces={pkt.timing_ms.get('faces', 0)}ms"
+                    f"t_faces={pkt.timing_ms.get('faces', 0)}ms "
+                    f"yolo_skipped={yolo_skipped}"
                 )
                 self._profile_next_ms = now_ms + 2000
 

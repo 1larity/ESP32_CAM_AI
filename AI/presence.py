@@ -9,7 +9,7 @@ from detectors import DetectionPacket
 from utils import ensure_dir
 
 class PresenceBus:
-    def __init__(self, cam_name: str, logs_dir: Path, ttl_ms: int = 2500):
+    def __init__(self, cam_name: str, logs_dir: Path, ttl_ms: int = 6000):
         self.cam = cam_name
         self.logs_dir = Path(logs_dir)
         self.ttl = ttl_ms

@@ -31,14 +31,14 @@
       "stream_url": "http://192.168.1.130:81/stream",
       "user": "sysadm",
       "token": null,
-      "password_enc": "/rJGm6qtxCDcbQLnIMurX/11AfNl5XLKJRBAXhcvnDb93981VmtD5wXAfe0notHwhnr6E2g="
+      "password_enc": "fuwXEIAo64C8UNwZsxFZ2RzDhTQl9e2qRE8iPSFzMN9+ov6i2y05kvT9IvUkIWyURNbNmfA="
     },
     {
       "name": "Cam-2",
       "stream_url": "http://192.168.1.132:81/stream",
       "user": "sysadm",
       "token": null,
-      "password_enc": "BsLdJ/y/6CUcM+PF+9k8SXSldiqjjklTTpxRCA/By/u2b6kdOb5G/6a7eCqsIxM5ux8yGIo="
+      "password_enc": "CXc6TBRpwy7huI6GjDvSOHv9sp0NSPRy2WtP61YAVsWRc3k0vIIP7zEt4s25Wvi0uQSwzJ8="
     }
   ]
 }
