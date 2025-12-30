@@ -7,6 +7,7 @@ from typing import Optional, Tuple
 from urllib.parse import urlparse
 import requests
 import numpy as np
+import cv2
 from PySide6 import QtCore, QtGui
 from PySide6.QtCore import Slot
 from detectors import DetectionPacket
@@ -18,6 +19,20 @@ from ..overlay_stats import FpsCounter, compute_yolo_stats, YoloStats
 
 def attach_video_handlers(cls) -> None:
     """Inject frame / detector / overlay / HUD helpers into CameraWidget."""
+
+    def _motion_settings(self) -> tuple[bool, int]:
+        cam_motion = getattr(self.cam_cfg, "record_motion", None)
+        app_motion = getattr(self.app_cfg, "record_motion", False)
+        record_motion = app_motion if cam_motion is None else bool(cam_motion)
+
+        cam_sens = getattr(self.cam_cfg, "motion_sensitivity", None)
+        app_sens = getattr(self.app_cfg, "motion_sensitivity", 50)
+        try:
+            sensitivity = int(app_sens if cam_sens is None else cam_sens)
+        except Exception:
+            sensitivity = 50
+        sensitivity = max(0, min(100, sensitivity))
+        return record_motion, sensitivity
 
     # ----------------------------
     # Overlay caching helpers
@@ -100,6 +115,10 @@ def attach_video_handlers(cls) -> None:
 
                 self._draw_stats_line(painter, fps, stats, w, h)
 
+            # Recording indicator overlay (placed on video, not toolbar)
+            if getattr(self, "_rec_indicator_on", False):
+                self._draw_rec_indicator(painter, w, h)
+
         finally:
             painter.end()
 
@@ -143,6 +162,12 @@ def attach_video_handlers(cls) -> None:
 
         # Hand off frame to recorder (recorder buffers a copy internally).
         self._recorder.on_frame(frame, ts_ms)
+
+        # For motion sensitivity (optional)
+        self._last_bgr_for_motion = frame
+        record_motion, _ = self._motion_settings()
+        if record_motion:
+            self._evaluate_motion_only()
 
         # Send the latest frame to the detector thread; detector copies on its side.
         if getattr(self, "_ai_enabled", False):
@@ -230,6 +255,9 @@ def attach_video_handlers(cls) -> None:
         # Presence log
         self._presence.update(pkt)
 
+        # Auto-recording triggers
+        self._evaluate_auto_record(pkt)
+
         # Remember last packet for flicker-free overlays
         self._last_pkt = pkt
         self._last_pkt_ts = pkt.ts_ms
@@ -314,9 +342,11 @@ def attach_video_handlers(cls) -> None:
         if self._recorder.writer is None:
             self._recorder.start()
             self.btn_rec.setText("STOP")
+            self._update_rec_indicator(True)
         else:
             self._recorder.stop()
             self.btn_rec.setText("REC")
+            self._update_rec_indicator(False)
 
     # ----------------------------
     # Bind injected methods
@@ -443,3 +473,132 @@ def attach_video_handlers(cls) -> None:
     cls._on_flash_level_changed = _on_flash_level_changed
     cls._flash_auto_adjust = _flash_auto_adjust
     cls._apply_flash_mode = _apply_flash_mode
+
+    def _draw_rec_indicator(self, p: QtGui.QPainter, w: int, h: int) -> None:
+        margin = 10
+        box_w, box_h = 76, 26
+        rect = QtCore.QRectF(w - box_w - margin, margin, box_w, box_h)
+        bg = QtGui.QColor(180, 0, 0, 180)
+        p.fillRect(rect, bg)
+
+        dot_r = 6
+        dot_center = QtCore.QPointF(rect.left() + 12, rect.center().y())
+        p.setBrush(QtGui.QBrush(QtGui.QColor(255, 80, 80)))
+        p.setPen(QtCore.Qt.PenStyle.NoPen)
+        p.drawEllipse(dot_center, dot_r, dot_r)
+
+        p.setPen(QtGui.QPen(QtGui.QColor(255, 230, 230)))
+        font = p.font()
+        font.setPointSize(max(font.pointSize(), 9))
+        font.setBold(True)
+        p.setFont(font)
+        p.drawText(
+            rect.adjusted(24, 0, -6, 0),
+            QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter,
+            "REC",
+        )
+
+    def _update_rec_indicator(self, recording: bool) -> None:
+        self._rec_indicator_on = bool(recording)
+        # ensure overlay refreshes when state changes
+        self._overlay_cache_dirty = True
+
+    # ----------------------------
+    # Auto recording helpers
+    # ----------------------------
+
+    def _evaluate_auto_record(self, pkt: DetectionPacket) -> None:
+        now_ms = monotonic_ms()
+        triggers = []
+
+        # Person detection (known/unknown via faces/yolo)
+        if getattr(self.app_cfg, "record_person", False):
+            if any((f.cls or "").lower() not in ("", "face", "unknown", "person") for f in getattr(pkt, "faces", []) or []):
+                triggers.append("person")
+            if any(b.cls == "person" for b in getattr(pkt, "yolo", []) or []):
+                triggers.append("person")
+
+        if getattr(self.app_cfg, "record_unknown_person", False):
+            if any((f.cls or "").lower() in ("", "face", "unknown", "person") for f in getattr(pkt, "faces", []) or []):
+                triggers.append("unknown_person")
+
+        if getattr(self.app_cfg, "record_pet", False):
+            if any(b.cls in ("dog", "cat") for b in getattr(pkt, "pets", []) or []):
+                triggers.append("pet")
+
+        if getattr(self.app_cfg, "record_unknown_pet", False):
+            # We don't have labels beyond cat/dog; treat any pet as unknown if flag set.
+            if getattr(pkt, "pets", None):
+                triggers.append("unknown_pet")
+
+        record_motion, _ = self._motion_settings()
+        if record_motion:
+            if self._motion_trigger():
+                triggers.append("motion")
+
+        if triggers:
+            self._auto_record_deadline = now_ms + 5000
+            if self._recorder.writer is None:
+                self._recorder.start()
+                self._auto_recording_active = True
+                self._update_rec_indicator(True)
+        else:
+            if self._auto_recording_active and now_ms > self._auto_record_deadline:
+                self._recorder.stop()
+                self._auto_recording_active = False
+                self._update_rec_indicator(False)
+
+    def _motion_trigger(self) -> bool:
+        if self._last_bgr_for_motion is None:
+            return False
+        _, sensitivity = self._motion_settings()
+        if sensitivity == 0:
+            return False
+        try:
+            # downscale for speed
+            small = cv2.resize(self._last_bgr_for_motion, (64, 36))
+            gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+            if not hasattr(self, "_motion_prev"):
+                self._motion_prev = gray
+                return False
+            diff = cv2.absdiff(gray, self._motion_prev)
+            self._motion_prev = gray
+
+            # Mean intensity change across the frame
+            score = float(np.mean(diff))
+            # Fraction of pixels above a small per-pixel delta; catches localized motion
+            pix_delta = 4.0 + (100 - sensitivity) * 0.1  # smaller delta at higher sensitivity
+            active_frac = float((diff > pix_delta).mean())
+
+            # Higher sensitivity -> lower thresholds
+            mean_threshold = 5.0 + (100 - sensitivity) * 0.15  # range ~5..20
+            active_threshold = 0.25 - (sensitivity * 0.002)    # range ~0.25..0.05
+            active_threshold = max(0.02, min(0.5, active_threshold))
+
+            return score > mean_threshold or active_frac > active_threshold
+        except Exception:
+            return False
+
+    def _evaluate_motion_only(self) -> None:
+        record_motion, _ = self._motion_settings()
+        if not record_motion:
+            return
+        now_ms = monotonic_ms()
+        if self._motion_trigger():
+            self._auto_record_deadline = now_ms + 5000
+            if self._recorder.writer is None:
+                self._recorder.start()
+                self._auto_recording_active = True
+                self._update_rec_indicator(True)
+        else:
+            if self._auto_recording_active and now_ms > self._auto_record_deadline:
+                self._recorder.stop()
+                self._auto_recording_active = False
+                self._update_rec_indicator(False)
+
+    cls._motion_settings = _motion_settings
+    cls._draw_rec_indicator = _draw_rec_indicator
+    cls._update_rec_indicator = _update_rec_indicator
+    cls._evaluate_auto_record = _evaluate_auto_record
+    cls._motion_trigger = _motion_trigger
+    cls._evaluate_motion_only = _evaluate_motion_only

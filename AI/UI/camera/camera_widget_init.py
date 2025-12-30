@@ -54,13 +54,16 @@ def init_camera_widget(self) -> None:
 
     self.btn_info = QtWidgets.QToolButton()
     self.btn_info.setText("Info")
+    self.btn_cam_settings = QtWidgets.QToolButton()
+    self.btn_cam_settings.setText("Cam Settings")
+    # Recording indicator (moved to overlay; keep label but do not show in toolbar)
+    self.lbl_rec = QtWidgets.QLabel("")
+    self.lbl_rec.setStyleSheet("color: red; font-weight: bold;")
+    self.lbl_rec.setVisible(False)
 
-    # Overlays menu
+    # Overlays menu (controls moved into Cam Settings dialog; keep actions for logic)
     self.btn_overlay_menu = QtWidgets.QToolButton()
-    self.btn_overlay_menu.setText("Overlays")
-    self.btn_overlay_menu.setPopupMode(
-        QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup
-    )
+    self.btn_overlay_menu.setVisible(False)
     self.menu_overlays = QtWidgets.QMenu(self)
     self.act_overlay_detections = self.menu_overlays.addAction(
         "Detections (boxes + labels)"
@@ -81,6 +84,7 @@ def init_camera_widget(self) -> None:
     self.btn_ai_menu.setPopupMode(
         QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup
     )
+    self.btn_ai_menu.setVisible(False)  # moved into Cam Settings
     self.menu_ai = QtWidgets.QMenu(self)
 
     self.act_ai_enabled = self.menu_ai.addAction("Enable AI")
@@ -101,32 +105,27 @@ def init_camera_widget(self) -> None:
 
     self.btn_ai_menu.setMenu(self.menu_ai)
 
-    # Flash controls
+    # Flash controls (moved into Cam Settings dialog; keep widgets for logic)
     self.cb_flash = QtWidgets.QComboBox()
     self.cb_flash.addItems(["Off", "On", "Auto"])
+    self.cb_flash.setVisible(False)
     self.s_flash = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
     self.s_flash.setRange(0, 1023)
     self.s_flash.setSingleStep(8)
     self.s_flash.setFixedWidth(120)
+    self.s_flash.setVisible(False)
     self.lbl_flash = QtWidgets.QLabel("0")
-    flash_wrap = QtWidgets.QHBoxLayout()
-    flash_wrap.setContentsMargins(0, 0, 0, 0)
-    flash_wrap.addWidget(QtWidgets.QLabel("LED"))
-    flash_wrap.addWidget(self.cb_flash)
-    flash_wrap.addWidget(self.s_flash)
-    flash_wrap.addWidget(self.lbl_flash)
+    self.lbl_flash.setVisible(False)
 
     # Assemble toolbar (same order as before, but with View menu)
     tb.addWidget(self.btn_rec)
     tb.addWidget(self.btn_snap)
     tb.addSpacing(12)
-    tb.addLayout(flash_wrap)
-    tb.addSpacing(12)
     tb.addWidget(self.btn_ai_menu)
-    tb.addWidget(self.btn_overlay_menu)
     tb.addStretch(1)
     tb.addWidget(self.btn_view_menu)
     tb.addWidget(self.btn_info)
+    tb.addWidget(self.btn_cam_settings)
     tb.addWidget(self.btn_lock)
 
     root_layout.addLayout(tb)
@@ -136,15 +135,28 @@ def init_camera_widget(self) -> None:
     # State
     # ------------------------------------------------------------------
     self._overlays = OverlayFlags()
-    self._ai_enabled = True
     self._overlay_master_updating = False
+    ai_enabled = getattr(self.cam_cfg, "ai_enabled", None)
+    self._ai_enabled = True if ai_enabled is None else bool(ai_enabled)
+    ai_yolo = getattr(self.cam_cfg, "ai_yolo", None)
+    ai_faces = getattr(self.cam_cfg, "ai_faces", None)
+    ai_pets = getattr(self.cam_cfg, "ai_pets", None)
+    self._overlays.yolo = True if ai_yolo is None else bool(ai_yolo)
+    self._overlays.faces = True if ai_faces is None else bool(ai_faces)
+    self._overlays.pets = True if ai_pets is None else bool(ai_pets)
 
     self._last_bgr = None
     self._last_ts = 0
     self._last_pkt = None
     self._last_pkt_ts = 0
+    self._last_bgr_for_motion = None
+    self._auto_record_deadline = 0
+    self._auto_recording_active = False
+    self._rec_indicator_on = False
     # keep overlays around a bit to avoid flicker
     self._overlay_ttl_ms = 750  # matches previous CameraWidget
+    # Enrollment service singleton
+    self._enrollment = EnrollmentService.instance()
     # Flash state
     self._flash_mode = getattr(self.cam_cfg, "flash_mode", "off") or "off"
     self._flash_level = int(getattr(self.cam_cfg, "flash_level", 512) or 512)
@@ -167,6 +179,11 @@ def init_camera_widget(self) -> None:
         self.cam_cfg.name,
         self.app_cfg.logs_dir,
         ttl_ms=getattr(face_params, "presence_ttl_ms", 6000),
+    )
+    # Configure unknown capture flags
+    EnrollmentService.instance().set_unknown_capture(
+        faces=getattr(self.app_cfg, "collect_unknown_faces", False),
+        pets=getattr(self.app_cfg, "collect_unknown_pets", False),
     )
 
     # Detector thread – use app-level settings (as in original)
@@ -197,6 +214,7 @@ def init_camera_widget(self) -> None:
     self.btn_snap.clicked.connect(self._snapshot)
     self.cb_flash.currentTextChanged.connect(self._on_flash_mode_changed)
     self.s_flash.valueChanged.connect(self._on_flash_level_changed)
+    self.btn_cam_settings.clicked.connect(self._open_camera_settings)
 
     # View menu actions -> view helpers (provided by camera_widget_view.py)
     self.act_view_fit.triggered.connect(self.fit_to_window)
@@ -222,11 +240,15 @@ def init_camera_widget(self) -> None:
     # Intercept view move/resize when locked
     self.view.installEventFilter(self)
 
-    # Defaults
+    # Defaults (respect per-camera overrides already applied)
+    self.act_ai_enabled.setChecked(self._ai_enabled)
+    self.act_ai_yolo.setChecked(self._overlays.yolo)
+    self.act_ai_faces.setChecked(self._overlays.faces)
+    self.act_ai_pets.setChecked(self._overlays.pets)
+    self.act_overlay_detections.setChecked(
+        self._overlays.yolo or self._overlays.faces or self._overlays.pets
+    )
     self._overlays.hud = True
-    self._overlays.yolo = True
-    self._overlays.faces = True
-    self._overlays.pets = True
     self._overlays.stats = True
 
     # Initialize flash controls/state

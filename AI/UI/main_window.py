@@ -13,6 +13,8 @@ from UI.discovery_dialog import DiscoveryDialog
 from UI.ip_cam_dialog import AddIpCameraDialog
 from UI.camera import CameraWidget
 from UI.face_tuner import FaceRecTunerDialog
+from UI.unknown_capture_dialog import UnknownCaptureDialog
+from UI.security_recording_dialog import SecurityRecordingDialog
 from enrollment import get_enrollment_service
 
 
@@ -86,7 +88,11 @@ class MainWindow(QtWidgets.QMainWindow):
             self._add_camera_window(cam)
 
     def _add_camera_window(self, cam_cfg: CameraSettings) -> None:
-        w = CameraWidget(cam_cfg, self.app_cfg, self)
+        try:
+            w = CameraWidget(cam_cfg, self.app_cfg, self)
+        except Exception as e:
+            print(f"[MainWindow] Failed to init camera {getattr(cam_cfg, 'name', '')}: {e}")
+            return
 
         sub = QtWidgets.QMdiSubWindow()
         sub.setWidget(w)
@@ -102,7 +108,7 @@ class MainWindow(QtWidgets.QMainWindow):
             x, y, w_geom, h_geom, maximized = map(int, geom_rec[:5])
             if maximized:
                 sub.showMaximized()
-            else:
+            elif w_geom >= 200 and h_geom >= 200:
                 sub.setGeometry(x, y, w_geom, h_geom)
 
         # remember our QMdiSubWindow in the widget so fit_window_to_video
@@ -220,6 +226,24 @@ class MainWindow(QtWidgets.QMainWindow):
         dlg = DiscoveryDialog(self.app_cfg, self)
         dlg.exec()
 
+    def _open_unknown_capture_dialog(self) -> None:
+        dlg = UnknownCaptureDialog(self.app_cfg, self)
+        if dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+            dlg.apply()
+            EnrollmentService.instance().set_unknown_capture(
+                faces=self.app_cfg.collect_unknown_faces,
+                pets=self.app_cfg.collect_unknown_pets,
+                limit=getattr(self.app_cfg, "unknown_capture_limit", 50),
+                auto_train=getattr(self.app_cfg, "auto_train_unknowns", False),
+            )
+            save_settings(self.app_cfg)
+
+    def _open_security_recording_dialog(self) -> None:
+        dlg = SecurityRecordingDialog(self.app_cfg, self)
+        if dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+            dlg.apply()
+            save_settings(self.app_cfg)
+
     # ------------------------------------------------------------------ #
     # menus
     # ------------------------------------------------------------------ #
@@ -269,6 +293,16 @@ class MainWindow(QtWidgets.QMainWindow):
         m_tools.addAction("Face recognizer tuner").triggered.connect(
             lambda: FaceRecTunerDialog(str(self.app_cfg.models_dir), self).exec()
         )
+        # Unknown capture / auto-train dialog
+        m_tools.addAction("Unknown capture & auto-train…").triggered.connect(
+            self._open_unknown_capture_dialog
+        )
+
+        # Security recording dialog
+        m_tools.addAction("Security recording…").triggered.connect(
+            self._open_security_recording_dialog
+        )
+
         act_rebuild_faces = QtGui.QAction("Rebuild face model from disk", self)
         act_rebuild_faces.triggered.connect(
             lambda: self._start_face_rebuild("Rebuild Face Model")
@@ -334,6 +368,28 @@ class MainWindow(QtWidgets.QMainWindow):
         self._face_rebuild_worker = worker
 
         thread.start()
+
+    # Toggle handlers
+    def _on_unknown_faces_toggled(self, checked: bool) -> None:
+        self.app_cfg.collect_unknown_faces = bool(checked)
+        svc = EnrollmentService.instance()
+        svc.set_unknown_capture(faces=self.app_cfg.collect_unknown_faces, pets=self.app_cfg.collect_unknown_pets)
+        save_settings(self.app_cfg)
+
+    def _on_unknown_pets_toggled(self, checked: bool) -> None:
+        self.app_cfg.collect_unknown_pets = bool(checked)
+        svc = EnrollmentService.instance()
+        svc.set_unknown_capture(faces=self.app_cfg.collect_unknown_faces, pets=self.app_cfg.collect_unknown_pets)
+        save_settings(self.app_cfg)
+
+    def _on_ignore_enroll_toggled(self, checked: bool) -> None:
+        self.app_cfg.ignore_enrollment_models = bool(checked)
+        save_settings(self.app_cfg)
+        QtWidgets.QMessageBox.information(
+            self,
+            "Ignore Enrollment Models",
+            "Setting will take effect on next detector restart. Restart app to reload without LBPH.",
+        )
 
     @Slot(bool)
     def _on_face_rebuild_finished(self, ok: bool) -> None:

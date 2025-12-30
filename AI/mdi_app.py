@@ -15,7 +15,7 @@ from utils import DebugMode
 utils.DEBUG_MODE = DebugMode.BOTH
 
 # Application version shown on the startup screen.
-APP_VERSION = "0.1.7"
+APP_VERSION = "0.1.8"
 
 
 def main():
@@ -26,13 +26,21 @@ def main():
 
     # Show a short loader while wiring camera windows; loader kicks off internally.
     if app_cfg.cameras:
-        dlg = StartupDialog(
-            app_cfg.cameras,
-            loader=win._add_camera_window,
-            parent=win,
-            version=APP_VERSION,
-        )
-        dlg.exec()
+        try:
+            dlg = StartupDialog(
+                app_cfg.cameras,
+                loader=win._add_camera_window,
+                parent=win,
+                version=APP_VERSION,
+            )
+            dlg.exec()
+        except Exception as e:
+            print(f"[Startup] dialog failed, falling back to direct load: {e}")
+            for cam in app_cfg.cameras:
+                try:
+                    win._add_camera_window(cam)
+                except Exception as e_add:
+                    print(f"[Startup] failed to add {getattr(cam, 'name', '?')}: {e_add}")
 
     win.show()
     sys.exit(app.exec())

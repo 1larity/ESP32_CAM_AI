@@ -48,8 +48,12 @@ class EnrollmentService(QtCore.QObject):
 
         # Where face crops and models are stored
         self.face_dir: Path = BASE_DIR / "data" / "faces"
+        self.unknown_face_dir: Path = BASE_DIR / "data" / "unknown_faces"
+        self.unknown_pet_dir: Path = BASE_DIR / "data" / "unknown_pets"
         self.models_dir: Path = BASE_DIR / "models"
         self.face_dir.mkdir(parents=True, exist_ok=True)
+        self.unknown_face_dir.mkdir(parents=True, exist_ok=True)
+        self.unknown_pet_dir.mkdir(parents=True, exist_ok=True)
         self.models_dir.mkdir(parents=True, exist_ok=True)
 
         # Enrollment state
@@ -67,6 +71,15 @@ class EnrollmentService(QtCore.QObject):
 
         # Number of images already on disk when enrollment started
         self._existing_count: int = 0
+
+        # Unknown collection settings
+        self.collect_unknown_faces: bool = False
+        self.collect_unknown_pets: bool = False
+        self._last_unknown_face: Dict[str, int] = {}
+        self._last_unknown_pet: Dict[str, int] = {}
+        self.unknown_capture_limit: int = 50
+        self.auto_train_unknowns: bool = False
+        self._auto_label_idx: int = 1
 
     # ------------------------------------------------------------------ singleton access
 
@@ -97,6 +110,18 @@ class EnrollmentService(QtCore.QObject):
         }
         data.update(kwargs)
         self.status_changed.emit(data)
+
+    # ------------------------------------------------------------------ config
+
+    def set_unknown_capture(
+        self, faces: bool, pets: bool, limit: int | None = None, auto_train: bool | None = None
+    ) -> None:
+        self.collect_unknown_faces = bool(faces)
+        self.collect_unknown_pets = bool(pets)
+        if limit is not None:
+            self.unknown_capture_limit = max(1, int(limit))
+        if auto_train is not None:
+            self.auto_train_unknowns = bool(auto_train)
 
     # ------------------------------------------------------------------ public API (control)
 
@@ -163,17 +188,20 @@ class EnrollmentService(QtCore.QObject):
         pkt:
           DetectionPacket with at least `.faces` containing DetBox objects.
         """
+        if bgr is None or pkt is None:
+            return
+
+        now_ms = int(time.time() * 1000)
+
+        # Collect unknowns even when not actively enrolling
+        self._maybe_save_unknowns(cam_name, bgr, pkt, now_ms)
+
         if not self.active:
             return
 
         # Respect camera filter if set
         if self.target_cam is not None and cam_name != self.target_cam:
             return
-
-        if bgr is None or pkt is None:
-            return
-
-        now_ms = int(time.time() * 1000)
 
         # Delegate the heavy lifting (face selection, debouncing, path creation)
         new_last_save_ms, last_gray, saved = capture_enrollment_sample(
@@ -208,6 +236,81 @@ class EnrollmentService(QtCore.QObject):
             # Freeze further sampling and kick off training
             self.active = False
             self._train_now()
+
+    # ------------------------------------------------------------------ unknown capture
+
+    def _maybe_save_unknowns(self, cam_name: str, bgr: np.ndarray, pkt, now_ms: int) -> None:
+        """Persist unknown faces/pets into queue folders for later training."""
+        if self.collect_unknown_faces:
+            for face in getattr(pkt, "faces", []) or []:
+                label = (face.cls or "").lower()
+                if label in ("", "face", "unknown", "person"):
+                    last = self._last_unknown_face.get(cam_name, 0)
+                    if now_ms - last < 800:
+                        continue
+                    # enforce per-cam limit
+                    if self._count_unknown(self.unknown_face_dir / cam_name) >= self.unknown_capture_limit:
+                        continue
+                    self._last_unknown_face[cam_name] = now_ms
+                    try:
+                        x1, y1, x2, y2 = map(int, face.xyxy)
+                        roi = bgr[max(0, y1):max(0, y2), max(0, x1):max(0, x2)]
+                        if roi.size == 0:
+                            continue
+                        out_dir = self.unknown_face_dir / cam_name
+                        out_dir.mkdir(parents=True, exist_ok=True)
+                        fname = f"{cam_name}_{now_ms}.jpg"
+                        from cv2 import imwrite
+                        imwrite(str(out_dir / fname), roi)
+                        if self.auto_train_unknowns:
+                            self._promote_unknown(roi, cam_name, is_pet=False)
+                    except Exception:
+                        continue
+
+        if self.collect_unknown_pets:
+            for pet in getattr(pkt, "pets", []) or []:
+                last = self._last_unknown_pet.get(cam_name, 0)
+                if now_ms - last < 800:
+                    continue
+                if self._count_unknown(self.unknown_pet_dir / cam_name) >= self.unknown_capture_limit:
+                    continue
+                self._last_unknown_pet[cam_name] = now_ms
+                try:
+                    x1, y1, x2, y2 = map(int, pet.xyxy)
+                    roi = bgr[max(0, y1):max(0, y2), max(0, x1):max(0, x2)]
+                    if roi.size == 0:
+                        continue
+                    out_dir = self.unknown_pet_dir / cam_name
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    fname = f"{cam_name}_{now_ms}_{pet.cls}.jpg"
+                    from cv2 import imwrite
+                    imwrite(str(out_dir / fname), roi)
+                    if self.auto_train_unknowns:
+                        self._promote_unknown(roi, cam_name, is_pet=True)
+                except Exception:
+                    continue
+
+    def _count_unknown(self, path: Path) -> int:
+        if not path.exists():
+            return 0
+        return len(list(path.glob("*.jpg")))
+
+    def _promote_unknown(self, roi, cam_name: str, is_pet: bool) -> None:
+        """
+        Save unknown into auto_* folder for provisional training and kick rebuild.
+        """
+        try:
+            from cv2 import imwrite
+            label_prefix = "auto_pet" if is_pet else "auto_person"
+            out_dir = self.face_dir / f"{label_prefix}_{cam_name}"
+            out_dir.mkdir(parents=True, exist_ok=True)
+            fname = f"{label_prefix}_{self._auto_label_idx:05d}.jpg"
+            self._auto_label_idx += 1
+            imwrite(str(out_dir / fname), roi)
+            # Kick rebuild asynchronously
+            QtCore.QTimer.singleShot(0, self._train_now)
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------ training
 

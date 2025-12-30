@@ -30,6 +30,14 @@ class CameraSettings:
     flash_level: int = 512          # 0-1023
     flash_auto_target: int = 80     # desired brightness (0-255)
     flash_auto_hyst: int = 15       # hysteresis band (0-255)
+    # Per-camera recording overrides (fallback to app defaults if None)
+    record_motion: Optional[bool] = None
+    motion_sensitivity: Optional[int] = None
+    # Per-camera AI toggles (fallback to app defaults of enabled)
+    ai_enabled: Optional[bool] = None
+    ai_yolo: Optional[bool] = None
+    ai_faces: Optional[bool] = None
+    ai_pets: Optional[bool] = None
 
     @classmethod
     def from_ip(cls, name: str, host: str, user: Optional[str] = None,
@@ -58,6 +66,18 @@ class AppSettings:
     window_state: Optional[str] = None     # hex-encoded QByteArray
     window_geometries: Dict[str, List[int]] = field(default_factory=dict)  # cam_name -> [x,y,w,h,maximized]
     cameras: List[CameraSettings] = field(default_factory=list)
+    collect_unknown_faces: bool = False
+    collect_unknown_pets: bool = False
+    ignore_enrollment_models: bool = False
+    unknown_capture_limit: int = 50  # max images per class per cam
+    auto_train_unknowns: bool = False
+    # Security recording triggers
+    record_person: bool = False
+    record_unknown_person: bool = False
+    record_pet: bool = False
+    record_unknown_pet: bool = False
+    record_motion: bool = False
+    motion_sensitivity: int = 50  # 0-100
 
 def load_settings() -> AppSettings:
     if SETTINGS_FILE.exists():
@@ -82,6 +102,12 @@ def load_settings() -> AppSettings:
                     flash_level=int(c.get("flash_level", 512)),
                     flash_auto_target=int(c.get("flash_auto_target", 80)),
                     flash_auto_hyst=int(c.get("flash_auto_hyst", 15)),
+                    record_motion=c.get("record_motion", raw.get("record_motion")),
+                    motion_sensitivity=c.get("motion_sensitivity", raw.get("motion_sensitivity")),
+                    ai_enabled=c.get("ai_enabled"),
+                    ai_yolo=c.get("ai_yolo"),
+                    ai_faces=c.get("ai_faces"),
+                    ai_pets=c.get("ai_pets"),
                 )
             )
         cfg = AppSettings(
@@ -96,7 +122,18 @@ def load_settings() -> AppSettings:
             window_geometry=raw.get("window_geometry"),
             window_state=raw.get("window_state"),
             window_geometries=raw.get("window_geometries", {}) or {},
-            cameras=cams
+            cameras=cams,
+            collect_unknown_faces=bool(raw.get("collect_unknown_faces", False)),
+            collect_unknown_pets=bool(raw.get("collect_unknown_pets", False)),
+            ignore_enrollment_models=bool(raw.get("ignore_enrollment_models", False)),
+            unknown_capture_limit=int(raw.get("unknown_capture_limit", 50)),
+            auto_train_unknowns=bool(raw.get("auto_train_unknowns", False)),
+            record_person=bool(raw.get("record_person", False)),
+            record_unknown_person=bool(raw.get("record_unknown_person", False)),
+            record_pet=bool(raw.get("record_pet", False)),
+            record_unknown_pet=bool(raw.get("record_unknown_pet", False)),
+            record_motion=bool(raw.get("record_motion", False)),
+            motion_sensitivity=int(raw.get("motion_sensitivity", 50)),
         )
     else:
         cfg = AppSettings()
@@ -122,6 +159,17 @@ def save_settings(cfg: AppSettings):
         "window_geometry": cfg.window_geometry,
         "window_state": cfg.window_state,
         "window_geometries": cfg.window_geometries,
+        "collect_unknown_faces": cfg.collect_unknown_faces,
+        "collect_unknown_pets": cfg.collect_unknown_pets,
+        "ignore_enrollment_models": cfg.ignore_enrollment_models,
+        "unknown_capture_limit": cfg.unknown_capture_limit,
+        "auto_train_unknowns": cfg.auto_train_unknowns,
+        "record_person": cfg.record_person,
+        "record_unknown_person": cfg.record_unknown_person,
+        "record_pet": cfg.record_pet,
+        "record_unknown_pet": cfg.record_unknown_pet,
+        "record_motion": cfg.record_motion,
+        "motion_sensitivity": cfg.motion_sensitivity,
         "cameras": [],
     }
     # Write cameras with encrypted password; avoid persisting plaintext.

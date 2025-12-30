@@ -7,7 +7,8 @@ import requests
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from settings import AppSettings, CameraSettings
+from settings import AppSettings, CameraSettings, save_settings
+from .camera_settings_dialog import CameraSettingsDialog
 
 # Helper initialiser / attach functions
 from .camera_widget_init import init_camera_widget
@@ -147,6 +148,14 @@ class CameraWidget(QtWidgets.QWidget):
         dlg.setStandardButtons(QtWidgets.QMessageBox.StandardButton.Ok)
         dlg.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
         dlg.exec()
+
+    def _open_camera_settings(self) -> None:
+        dlg = CameraSettingsDialog(self.cam_cfg, self.app_cfg, self, self)
+        if dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+            dlg.apply()
+            save_settings(self.app_cfg)
+            # make sure any motion toggle/sensitivity changes apply immediately
+            self._overlay_cache_dirty = True
 
 
 # Keep module-level attachment too (harmless with the class guard above).

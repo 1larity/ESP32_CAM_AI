@@ -31,6 +31,7 @@ class DetectorConfig:
     yolo_nms: float = 0.45
     interval_ms: int = 100
     face_cascade: Optional[str] = None
+    use_lbph: bool = True
 
     @classmethod
     def from_app(cls, app_cfg):
@@ -41,6 +42,7 @@ class DetectorConfig:
             yolo_nms=0.45,
             interval_ms=getattr(app_cfg, "detect_interval_ms", 100),
             face_cascade=str((m / "haarcascade_frontalface_default.xml").resolve()),
+            use_lbph=not getattr(app_cfg, "ignore_enrollment_models", False),
         )
 
 
@@ -82,7 +84,10 @@ class DetectorThread(QtCore.QThread):
         else:
             print(f"[Detector:{self.name}] Haar cascade not found at {self.cfg.face_cascade}")
 
-        self._rec, self._labels = load_lbph(self.models_dir)
+        if self.cfg.use_lbph:
+            self._rec, self._labels = load_lbph(self.models_dir)
+        else:
+            self._rec, self._labels = None, {}
 
         print(
             f"[Detector:{self.name}] init: net={'OK' if self._net is not None else 'NONE'}, "
