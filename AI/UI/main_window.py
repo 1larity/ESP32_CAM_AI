@@ -2,7 +2,9 @@ from __future__ import annotations
 from typing import Optional
 from PySide6 import QtCore, QtGui, QtWidgets
 from PySide6.QtCore import Signal, Slot
-from settings import AppSettings, CameraSettings, save_settings
+from settings import AppSettings, CameraSettings, save_settings, BASE_DIR
+import shutil
+import datetime
 from utils import open_folder_or_warn
 from models import ModelManager
 from enrollment import EnrollmentService
@@ -14,7 +16,6 @@ from UI.ip_cam_dialog import AddIpCameraDialog
 from UI.camera import CameraWidget
 from UI.face_tuner import FaceRecTunerDialog
 from UI.unknown_capture_dialog import UnknownCaptureDialog
-from UI.security_recording_dialog import SecurityRecordingDialog
 from enrollment import get_enrollment_service
 
 
@@ -226,6 +227,32 @@ class MainWindow(QtWidgets.QMainWindow):
         dlg = DiscoveryDialog(self.app_cfg, self)
         dlg.exec()
 
+    def _remove_camera_dialog(self) -> None:
+        names = [getattr(c, "name", "") for c in self.app_cfg.cameras]
+        if not names:
+            QtWidgets.QMessageBox.information(self, "Remove Camera", "No cameras configured.")
+            return
+        name, ok = QtWidgets.QInputDialog.getItem(
+            self,
+            "Remove Camera",
+            "Select camera to remove:",
+            names,
+            editable=False,
+        )
+        if not ok or not name:
+            return
+        cams = [c for c in self.app_cfg.cameras if getattr(c, "name", None) != name]
+        if len(cams) == len(self.app_cfg.cameras):
+            QtWidgets.QMessageBox.information(
+                self, "Remove Camera", f"No camera named '{name}' found."
+            )
+            return
+        self.app_cfg.cameras = cams
+        save_settings(self.app_cfg)
+        QtWidgets.QMessageBox.information(
+            self, "Remove Camera", f"Removed camera '{name}'. Restart to take effect."
+        )
+
     def _open_unknown_capture_dialog(self) -> None:
         dlg = UnknownCaptureDialog(self.app_cfg, self)
         if dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted:
@@ -236,12 +263,6 @@ class MainWindow(QtWidgets.QMainWindow):
                 limit=getattr(self.app_cfg, "unknown_capture_limit", 50),
                 auto_train=getattr(self.app_cfg, "auto_train_unknowns", False),
             )
-            save_settings(self.app_cfg)
-
-    def _open_security_recording_dialog(self) -> None:
-        dlg = SecurityRecordingDialog(self.app_cfg, self)
-        if dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted:
-            dlg.apply()
             save_settings(self.app_cfg)
 
     # ------------------------------------------------------------------ #
@@ -266,11 +287,14 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # Cameras
         m_cams = menubar.addMenu("Cameras")
-        m_cams.addAction("Enroll faces / pets…").triggered.connect(
-            self._open_enrollment
+        m_cams.addAction("Add Camera by IP…").triggered.connect(
+            self._add_camera_ip_dialog
         )
-        m_cams.addAction("Image manager…").triggered.connect(
-            self._open_image_manager
+        m_cams.addAction("Add Camera by URL…").triggered.connect(
+            self._add_camera_url_dialog
+        )
+        m_cams.addAction("Remove Camera…").triggered.connect(
+            self._remove_camera_dialog
         )
         m_cams.addSeparator()
         m_cams.addAction("Discover ESP32-CAMs…").triggered.connect(
@@ -287,6 +311,13 @@ class MainWindow(QtWidgets.QMainWindow):
             lambda: open_folder_or_warn(self, self.app_cfg.logs_dir)
         )
         m_tools.addSeparator()
+        m_tools.addAction("Enroll faces / pets…").triggered.connect(
+            self._open_enrollment
+        )
+        m_tools.addAction("Image manager…").triggered.connect(
+            self._open_image_manager
+        )
+        m_tools.addSeparator()
         m_tools.addAction("Fetch default models").triggered.connect(
             lambda: ModelManager.fetch_defaults(self, self.app_cfg)
         )
@@ -298,10 +329,20 @@ class MainWindow(QtWidgets.QMainWindow):
             self._open_unknown_capture_dialog
         )
 
-        # Security recording dialog
-        m_tools.addAction("Security recording…").triggered.connect(
-            self._open_security_recording_dialog
-        )
+        # LBPH toggle (ignore enrollment models)
+        act_ignore = QtGui.QAction("Ignore enrollment models (disable LBPH)", self)
+        act_ignore.setCheckable(True)
+        act_ignore.setChecked(bool(getattr(self.app_cfg, "ignore_enrollment_models", False)))
+        act_ignore.toggled.connect(self._on_ignore_enroll_toggled)
+        m_tools.addAction(act_ignore)
+
+        act_archive = QtGui.QAction("Archive person/pet and rebuild", self)
+        act_archive.triggered.connect(self._archive_person_folder)
+        m_tools.addAction(act_archive)
+
+        act_restore = QtGui.QAction("Restore person/pet from archive and rebuild", self)
+        act_restore.triggered.connect(self._restore_person_folder)
+        m_tools.addAction(act_restore)
 
         act_rebuild_faces = QtGui.QAction("Rebuild face model from disk", self)
         act_rebuild_faces.triggered.connect(
@@ -373,13 +414,23 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_unknown_faces_toggled(self, checked: bool) -> None:
         self.app_cfg.collect_unknown_faces = bool(checked)
         svc = EnrollmentService.instance()
-        svc.set_unknown_capture(faces=self.app_cfg.collect_unknown_faces, pets=self.app_cfg.collect_unknown_pets)
+        svc.set_unknown_capture(
+            faces=self.app_cfg.collect_unknown_faces,
+            pets=self.app_cfg.collect_unknown_pets,
+            limit=getattr(self.app_cfg, "unknown_capture_limit", 50),
+            auto_train=getattr(self.app_cfg, "auto_train_unknowns", False),
+        )
         save_settings(self.app_cfg)
 
     def _on_unknown_pets_toggled(self, checked: bool) -> None:
         self.app_cfg.collect_unknown_pets = bool(checked)
         svc = EnrollmentService.instance()
-        svc.set_unknown_capture(faces=self.app_cfg.collect_unknown_faces, pets=self.app_cfg.collect_unknown_pets)
+        svc.set_unknown_capture(
+            faces=self.app_cfg.collect_unknown_faces,
+            pets=self.app_cfg.collect_unknown_pets,
+            limit=getattr(self.app_cfg, "unknown_capture_limit", 50),
+            auto_train=getattr(self.app_cfg, "auto_train_unknowns", False),
+        )
         save_settings(self.app_cfg)
 
     def _on_ignore_enroll_toggled(self, checked: bool) -> None:
@@ -418,3 +469,112 @@ class MainWindow(QtWidgets.QMainWindow):
                 "Rebuild Face Model",
                 "No face samples found to rebuild.",
             )
+
+    def _archive_person_folder(self) -> None:
+        """
+        Move a named person/pet folder out of data/faces into an archive,
+        then rebuild LBPH without that data.
+        """
+        name, ok = QtWidgets.QInputDialog.getText(
+            self,
+            "Archive person/pet",
+            "Folder name under data/faces to archive:",
+        )
+        if not ok:
+            return
+        name = name.strip()
+        if not name:
+            return
+
+        src = BASE_DIR / "data" / "faces" / name
+        if not src.exists() or not src.is_dir():
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Archive person/pet",
+                f"Folder not found: {src}",
+            )
+            return
+
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        dest_dir = BASE_DIR / "data" / "archive" / "faces"
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / f"{name}_{ts}"
+        try:
+            shutil.move(str(src), str(dest))
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Archive person/pet",
+                f"Failed to archive {name}:\n{e}",
+            )
+            return
+
+        QtWidgets.QMessageBox.information(
+            self,
+            "Archive person/pet",
+            f"Archived {name} to:\n{dest}\n\nRebuilding face model without this data...",
+        )
+
+        self._start_face_rebuild(f"Rebuilding face model without {name}")
+
+    def _restore_person_folder(self) -> None:
+        """
+        Restore a previously archived person/pet folder back into data/faces and rebuild.
+        """
+        archive_root = BASE_DIR / "data" / "archive" / "faces"
+        if not archive_root.exists():
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Restore person/pet",
+                f"No archive folder found at:\n{archive_root}",
+            )
+            return
+
+        # List available archives
+        archives = sorted([p.name for p in archive_root.iterdir() if p.is_dir()])
+        if not archives:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Restore person/pet",
+                "No archived folders found.",
+            )
+            return
+
+        name, ok = QtWidgets.QInputDialog.getItem(
+            self,
+            "Restore person/pet",
+            "Select archive to restore:",
+            archives,
+            editable=False,
+        )
+        if not ok or not name:
+            return
+
+        src = archive_root / name
+        target_name = name.split("_")[0] if "_" in name else name
+        dest = BASE_DIR / "data" / "faces" / target_name
+
+        if dest.exists():
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Restore person/pet",
+                f"Destination already exists:\n{dest}\nRemove/rename it first.",
+            )
+            return
+
+        try:
+            shutil.move(str(src), str(dest))
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Restore person/pet",
+                f"Failed to restore {name}:\n{e}",
+            )
+            return
+
+        QtWidgets.QMessageBox.information(
+            self,
+            "Restore person/pet",
+            f"Restored to:\n{dest}\n\nRebuilding face model...",
+        )
+        self._start_face_rebuild(f"Rebuilding face model with {target_name}")

@@ -186,6 +186,8 @@ def init_camera_widget(self) -> None:
     EnrollmentService.instance().set_unknown_capture(
         faces=getattr(self.app_cfg, "collect_unknown_faces", False),
         pets=getattr(self.app_cfg, "collect_unknown_pets", False),
+        limit=getattr(self.app_cfg, "unknown_capture_limit", 50),
+        auto_train=getattr(self.app_cfg, "auto_train_unknowns", False),
     )
 
     # Detector thread – use app-level settings (as in original)

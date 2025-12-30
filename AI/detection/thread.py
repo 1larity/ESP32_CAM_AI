@@ -86,8 +86,10 @@ class DetectorThread(QtCore.QThread):
 
         if self.cfg.use_lbph:
             self._rec, self._labels = load_lbph(self.models_dir)
+            self._lbph_mtime = self._lbph_models_mtime()
         else:
             self._rec, self._labels = None, {}
+            self._lbph_mtime = 0
 
         print(
             f"[Detector:{self.name}] init: net={'OK' if self._net is not None else 'NONE'}, "
@@ -95,6 +97,24 @@ class DetectorThread(QtCore.QThread):
             f"lbph={'OK' if self._rec is not None else 'NONE'}, "
             f"yolo_conf={self.cfg.yolo_conf}"
         )
+
+    def _lbph_models_mtime(self) -> float:
+        try:
+            xml = os.path.join(self.models_dir, "lbph_faces.xml")
+            labels = os.path.join(self.models_dir, "labels_faces.json")
+            return max(os.path.getmtime(xml), os.path.getmtime(labels))
+        except Exception:
+            return 0.0
+
+    def _maybe_reload_lbph(self) -> None:
+        try:
+            mtime = self._lbph_models_mtime()
+            if mtime > getattr(self, "_lbph_mtime", 0):
+                self._rec, self._labels = load_lbph(self.models_dir)
+                self._lbph_mtime = mtime
+                print(f"[Detector:{self.name}] reloaded LBPH models (labels={len(self._labels)})")
+        except Exception:
+            pass
 
     def submit_frame(self, *args) -> None:
         if len(args) == 2:
@@ -171,6 +191,9 @@ class DetectorThread(QtCore.QThread):
             t1 = monotonic_ms()
 
             if self._face is not None:
+                # Hot-reload LBPH if models changed on disk (e.g., auto-train/unknowns)
+                if self.cfg.use_lbph:
+                    self._maybe_reload_lbph()
                 face_boxes, t_faces = run_faces(
                     bgr, self._face, self._rec, self._labels
                 )
