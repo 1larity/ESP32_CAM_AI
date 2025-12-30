@@ -17,6 +17,7 @@ class StartupDialog(QtWidgets.QDialog):
         cams: Sequence[object],
         loader: Callable[[object], None],
         parent: QtWidgets.QWidget | None = None,
+        version: str | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowFlags(
@@ -43,6 +44,7 @@ class StartupDialog(QtWidgets.QDialog):
         self.loader = loader
         self._idx = 0
         self._started = False
+        self.version = version
 
         self._build_ui()
 
@@ -58,6 +60,10 @@ class StartupDialog(QtWidgets.QDialog):
             QLabel#status {
                 color: #dde4f2;
                 font-size: 14px;
+            }
+            QLabel#version {
+                color: #b7c7e6;
+                font-size: 12px;
             }
             QProgressBar {
                 background: #0d172a;
@@ -95,7 +101,23 @@ class StartupDialog(QtWidgets.QDialog):
         # Overlay area for status/progress on top of the image
         self.overlay = QtWidgets.QWidget(self.img)
         overlay_lay = QtWidgets.QVBoxLayout(self.overlay)
-        overlay_lay.setContentsMargins(24, 0, 24, 24)
+        overlay_lay.setContentsMargins(16, 12, 16, 24)
+
+        # Top-right version label
+        self.lbl_version = QtWidgets.QLabel(self.overlay)
+        self.lbl_version.setObjectName("version")
+        self.lbl_version.setAlignment(
+            QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter
+        )
+        if self.version:
+            self.lbl_version.setText(f"v{self.version}")
+        else:
+            self.lbl_version.setVisible(False)
+
+        top_lay = QtWidgets.QHBoxLayout()
+        top_lay.addStretch(1)
+        top_lay.addWidget(self.lbl_version)
+        overlay_lay.addLayout(top_lay)
         overlay_lay.addStretch(1)
 
         self.lbl_status = QtWidgets.QLabel("Preparing...", self.overlay)

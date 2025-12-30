@@ -6,6 +6,9 @@ from settings import load_settings
 from UI.main_window import MainWindow
 from UI.startup import StartupDialog
 
+# Application version shown on the startup screen.
+APP_VERSION = "0.1.0"
+
 
 def main():
     app = QtWidgets.QApplication(sys.argv)
@@ -15,7 +18,12 @@ def main():
 
     # Show a short loader while wiring camera windows; loader kicks off internally.
     if app_cfg.cameras:
-        dlg = StartupDialog(app_cfg.cameras, loader=win._add_camera_window, parent=win)
+        dlg = StartupDialog(
+            app_cfg.cameras,
+            loader=win._add_camera_window,
+            parent=win,
+            version=APP_VERSION,
+        )
         dlg.exec()
 
     win.show()

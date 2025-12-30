@@ -12,6 +12,8 @@ import numpy as np
 
 from .packet import DetBox
 
+# Default distance threshold for LBPH recognition. Larger values are more lenient.
+LBPH_DEFAULT_THRESHOLD = 140.0
 
 def load_lbph(models_dir: str) -> Tuple[Optional[object], Dict[int, str]]:
     """
@@ -75,7 +77,7 @@ def run_faces(
                     roi = gray[fy:fy + fh, fx:fx + fw]
                     roi = cv2.resize(roi, (128, 128), interpolation=cv2.INTER_AREA)
                     pred, dist = rec.predict(roi)
-                    threshold = 110.0
+                    threshold = LBPH_DEFAULT_THRESHOLD
                     if 0 <= pred and dist <= threshold:
                         label_name = labels.get(int(pred), "face")
                         name = label_name
