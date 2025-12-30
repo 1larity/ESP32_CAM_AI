@@ -2,7 +2,7 @@
   "models_dir": "models",
   "output_dir": "recordings",
   "logs_dir": "logs",
-  "detect_interval_ms": 100,
+  "detect_interval_ms": 300,
   "thresh_yolo": 0.35,
   "prebuffer_ms": 3000,
   "yolo_url": null,

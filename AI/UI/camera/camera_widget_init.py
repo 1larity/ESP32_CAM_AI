@@ -147,11 +147,9 @@ def init_camera_widget(self) -> None:
     # Stream capture backend
     self._capture = StreamCapture(self.cam_cfg)
 
-    # Poll frames from StreamCapture – same cadence as before
+    # Poll frames from StreamCapture for UI at a video-friendly cadence (~30 FPS)
     self._frame_timer = QtCore.QTimer(self)
-    self._frame_timer.setInterval(
-        getattr(self.app_cfg, "detect_interval_ms", 30)
-    )
+    self._frame_timer.setInterval(33)  # 33 ms ≈ 30 FPS for smoother UI
 
     # Lock state / MDI subwindow tracking
     self._locked = False

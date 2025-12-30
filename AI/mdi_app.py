@@ -15,7 +15,7 @@ from utils import DebugMode
 utils.DEBUG_MODE = DebugMode.BOTH
 
 # Application version shown on the startup screen.
-APP_VERSION = "0.1.4"
+APP_VERSION = "0.1.5"
 
 
 def main():
