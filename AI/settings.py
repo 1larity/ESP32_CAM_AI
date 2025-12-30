@@ -6,6 +6,7 @@ from typing import Dict, List, Optional
 from pathlib import Path
 import json
 import os
+from crypto_utils import encrypt, decrypt
 
 # --- Project base directory (…/ESP32_CAM_AI/AI) ---
 BASE_DIR = Path(__file__).resolve().parent
@@ -58,7 +59,23 @@ def load_settings() -> AppSettings:
     if SETTINGS_FILE.exists():
         with SETTINGS_FILE.open("r", encoding="utf-8") as fp:
             raw = json.load(fp)
-        cams = [CameraSettings(**c) for c in raw.get("cameras", [])]
+        cams: List[CameraSettings] = []
+        for c in raw.get("cameras", []):
+            # Backward-compatible: support plaintext password or encrypted password_enc
+            pwd = c.get("password")
+            enc = c.get("password_enc")
+            if not pwd and enc:
+                ok, dec = decrypt(enc)
+                pwd = dec if ok else None
+            cams.append(
+                CameraSettings(
+                    name=c.get("name"),
+                    stream_url=c.get("stream_url"),
+                    user=c.get("user"),
+                    password=pwd,
+                    token=c.get("token"),
+                )
+            )
         cfg = AppSettings(
             models_dir=Path(raw.get("models_dir", "models")),
             output_dir=Path(raw.get("output_dir", "recordings")),
@@ -97,7 +114,13 @@ def save_settings(cfg: AppSettings):
         "window_geometry": cfg.window_geometry,
         "window_state": cfg.window_state,
         "window_geometries": cfg.window_geometries,
-        "cameras": [asdict(c) for c in cfg.cameras],
+        "cameras": [],
     }
+    # Write cameras with encrypted password; avoid persisting plaintext.
+    for c in cfg.cameras:
+        entry = asdict(c)
+        pwd = entry.pop("password", None)
+        entry["password_enc"] = encrypt(pwd) if pwd else None
+        data["cameras"].append(entry)
     with SETTINGS_FILE.open("w", encoding="utf-8") as fp:
         json.dump(data, fp, indent=2)

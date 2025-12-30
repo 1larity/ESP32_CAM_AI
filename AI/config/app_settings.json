@@ -30,15 +30,15 @@
       "name": "cam1",
       "stream_url": "http://192.168.1.130:81/stream",
       "user": "sysadm",
-      "password": "Observa90",
-      "token": null
+      "token": null,
+      "password_enc": "LO+ougFMgnOwKVudi2O4vD0Nsni/7j3Idufm5iqdQllbLcddfdcDiFbQ4Xe8a4AqHq/4uzM="
     },
     {
       "name": "Cam-2",
       "stream_url": "http://192.168.1.132:81/stream",
       "user": "sysadm",
-      "password": "Observa90",
-      "token": null
+      "token": null,
+      "password_enc": "ril3wGbBM+QOOuiKb85CKZx4/lHoqw1FYAE+rdyCBhL3POFgJTKrtaR8nmSmSb7F1zk7hrw="
     }
   ]
 }
