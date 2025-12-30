@@ -37,6 +37,8 @@ env/
 # Logs / temp
 *.log
 *.tmp
+AI/logs/*.jsonl
+AI/logs/*.json
 
 # Models / checkpoints
 *.h5
