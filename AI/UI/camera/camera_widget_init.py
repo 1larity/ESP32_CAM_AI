@@ -30,7 +30,7 @@ def init_camera_widget(self) -> None:
     # Toolbar
     # ------------------------------------------------------------------
     tb = QtWidgets.QHBoxLayout()
-    self.btn_rec = QtWidgets.QPushButton("ƒ-? REC")
+    self.btn_rec = QtWidgets.QPushButton("REC")
     self.btn_snap = QtWidgets.QPushButton("Snapshot")
 
     # View menu (replaces Fit / 100% / Fit win buttons)

@@ -18,7 +18,7 @@ class FaceRecTunerDialog(QtWidgets.QDialog):
         self.s_conf.setValue(int(self.params.accept_conf))
         self.s_conf.setTickInterval(5)
         self.s_conf.setTickPosition(QtWidgets.QSlider.TickPosition.TicksBelow)
-        layout.addRow("Accept confidence (ƒ%Ï):", self._wrap_slider(self.s_conf))
+        layout.addRow("Accept confidence (%):", self._wrap_slider(self.s_conf))
 
         self.s_roi = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
         self.s_roi.setRange(64, 256)

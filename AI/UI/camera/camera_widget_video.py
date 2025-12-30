@@ -290,10 +290,10 @@ def attach_video_handlers(cls) -> None:
     def _toggle_recording(self) -> None:
         if self._recorder.writer is None:
             self._recorder.start()
-            self.btn_rec.setText("ƒ-ÿ STOP")
+            self.btn_rec.setText("STOP")
         else:
             self._recorder.stop()
-            self.btn_rec.setText("ƒ-? REC")
+            self.btn_rec.setText("REC")
 
     # ----------------------------
     # Bind injected methods

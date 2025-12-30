@@ -84,9 +84,10 @@ def _draw_faces(p: QtGui.QPainter, boxes: list[DetBox]):
     for d in boxes:
         rgb = _face_color()
         _draw_box(p, d.xyxy, rgb)
-        # For faces, DetBox.cls is usually the label (name) if recognised
+        # For faces, DetBox.cls is usually the label (name) if recognised.
+        # Show score as a percentage to match the accept confidence UI.
         name = d.cls or "face"
-        text = f"{name} {d.score:.2f}"
+        text = f"{name} {d.score * 100:.0f}%"
         _draw_label(p, d.xyxy, text, rgb)
 
 
