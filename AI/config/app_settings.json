@@ -13,8 +13,8 @@
     "cam1": [
       0,
       0,
-      873,
-      777,
+      872,
+      746,
       0
     ],
     "Cam-2": [
@@ -42,17 +42,20 @@
       "stream_url": "http://192.168.1.130:81/stream",
       "user": "sysadm",
       "token": null,
-      "flash_mode": "auto",
-      "flash_level": 991,
+      "flash_mode": "off",
+      "flash_level": 0,
       "flash_auto_target": 80,
       "flash_auto_hyst": 15,
-      "record_motion": false,
+      "record_motion": true,
       "motion_sensitivity": 77,
-      "ai_enabled": null,
-      "ai_yolo": null,
-      "ai_faces": null,
-      "ai_pets": null,
-      "password_enc": "miQB3iWRTWhkZ44tBnbQeOhaUaa+O0tPH533JrdJQZXvLwNsq18hmh5XRT+1gquEL9sU+pQ="
+      "ai_enabled": true,
+      "ai_yolo": true,
+      "ai_faces": true,
+      "ai_pets": true,
+      "rotation_deg": 0,
+      "flip_horizontal": false,
+      "flip_vertical": false,
+      "password_enc": "Y6U0VaTcHFkYZVwjfm0tQU3WAlHKLb5NApYNjCkf+oB4r4OP8gW/XJ8D7Li9Ra/wrqqWyw4="
     },
     {
       "name": "Cam-2",
@@ -60,16 +63,19 @@
       "user": "sysadm",
       "token": null,
       "flash_mode": "off",
-      "flash_level": 512,
+      "flash_level": 0,
       "flash_auto_target": 80,
       "flash_auto_hyst": 15,
       "record_motion": false,
       "motion_sensitivity": 53,
-      "ai_enabled": null,
-      "ai_yolo": null,
-      "ai_faces": null,
-      "ai_pets": null,
-      "password_enc": "FlAkZZcoK/JMH/9pNPkS+AkZdHim+u9z/yrLI7kgxW5oHIHqjx3OKvptoi8a+PKipDNmBsw="
+      "ai_enabled": true,
+      "ai_yolo": true,
+      "ai_faces": true,
+      "ai_pets": true,
+      "rotation_deg": 0,
+      "flip_horizontal": false,
+      "flip_vertical": false,
+      "password_enc": "H0O/6blhu88nr4JyBcwDhMMbkADwTWnc9+b6XhIyrUEw+RKGaQQxrfbPawSB++G2g6xWMCU="
     }
   ]
 }

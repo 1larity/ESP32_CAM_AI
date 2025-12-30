@@ -138,6 +138,7 @@ def attach_video_handlers(cls) -> None:
         if not ok or frame is None:
             return
 
+        frame = self._apply_orientation(frame)
         self._last_bgr = frame
 
         # Auto-flash adjustment (throttled) based on scene brightness.
@@ -384,7 +385,7 @@ def attach_video_handlers(cls) -> None:
             return
         params = {}
         if level is not None:
-            params["level"] = max(0, min(1023, int(level)))
+            params["level"] = max(0, min(255, int(level)))
         if on is not None:
             params["on"] = 1 if on else 0
         try:
@@ -448,9 +449,9 @@ def attach_video_handlers(cls) -> None:
 
         # Hysteresis band
         if gray_mean < target - hyst:
-            new_level = min(1023, level + 32)
+            new_level = min(255, level + 16)
         elif gray_mean > target + hyst:
-            new_level = max(0, level - 32)
+            new_level = max(0, level - 16)
         else:
             return
 
@@ -502,6 +503,38 @@ def attach_video_handlers(cls) -> None:
         self._rec_indicator_on = bool(recording)
         # ensure overlay refreshes when state changes
         self._overlay_cache_dirty = True
+
+    def _on_orientation_changed(self) -> None:
+        # Stop any ongoing recording to avoid size mismatch errors.
+        if hasattr(self, "_recorder"):
+            self._recorder.close()
+        self._auto_recording_active = False
+        self._auto_record_deadline = 0
+        self._update_rec_indicator(False)
+        if hasattr(self, "btn_rec"):
+            self.btn_rec.setText("REC")
+        # Reset motion buffers so first frame after change re-seeds baseline.
+        if hasattr(self, "_motion_prev"):
+            del self._motion_prev
+        self._last_bgr_for_motion = None
+        self._last_bgr = None
+        self._last_pkt = None
+        self._overlay_cache_dirty = True
+
+    def _apply_orientation(self, frame):
+        rot = int(getattr(self.cam_cfg, "rotation_deg", 0) or 0)
+        if rot in (90, 180, 270):
+            if rot == 90:
+                frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+            elif rot == 180:
+                frame = cv2.rotate(frame, cv2.ROTATE_180)
+            elif rot == 270:
+                frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        if getattr(self.cam_cfg, "flip_horizontal", False):
+            frame = cv2.flip(frame, 1)
+        if getattr(self.cam_cfg, "flip_vertical", False):
+            frame = cv2.flip(frame, 0)
+        return frame
 
     # ----------------------------
     # Auto recording helpers
@@ -599,6 +632,8 @@ def attach_video_handlers(cls) -> None:
     cls._motion_settings = _motion_settings
     cls._draw_rec_indicator = _draw_rec_indicator
     cls._update_rec_indicator = _update_rec_indicator
+    cls._on_orientation_changed = _on_orientation_changed
+    cls._apply_orientation = _apply_orientation
     cls._evaluate_auto_record = _evaluate_auto_record
     cls._motion_trigger = _motion_trigger
     cls._evaluate_motion_only = _evaluate_motion_only

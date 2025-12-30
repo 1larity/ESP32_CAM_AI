@@ -27,7 +27,7 @@ class CameraSettings:
     password: Optional[str] = None
     token: Optional[str] = None
     flash_mode: str = "off"         # off | on | auto
-    flash_level: int = 512          # 0-1023
+    flash_level: int = 128          # 0-255
     flash_auto_target: int = 80     # desired brightness (0-255)
     flash_auto_hyst: int = 15       # hysteresis band (0-255)
     # Per-camera recording overrides (fallback to app defaults if None)
@@ -38,6 +38,10 @@ class CameraSettings:
     ai_yolo: Optional[bool] = None
     ai_faces: Optional[bool] = None
     ai_pets: Optional[bool] = None
+    # Per-camera orientation
+    rotation_deg: int = 0           # 0, 90, 180, 270
+    flip_horizontal: bool = False
+    flip_vertical: bool = False
 
     @classmethod
     def from_ip(cls, name: str, host: str, user: Optional[str] = None,
@@ -99,7 +103,7 @@ def load_settings() -> AppSettings:
                     password=pwd,
                     token=c.get("token"),
                     flash_mode=c.get("flash_mode", "off"),
-                    flash_level=int(c.get("flash_level", 512)),
+                    flash_level=max(0, min(255, int(c.get("flash_level", 128)))),
                     flash_auto_target=int(c.get("flash_auto_target", 80)),
                     flash_auto_hyst=int(c.get("flash_auto_hyst", 15)),
                     record_motion=c.get("record_motion", raw.get("record_motion")),
@@ -108,6 +112,9 @@ def load_settings() -> AppSettings:
                     ai_yolo=c.get("ai_yolo"),
                     ai_faces=c.get("ai_faces"),
                     ai_pets=c.get("ai_pets"),
+                    rotation_deg=int(c.get("rotation_deg", 0) or 0),
+                    flip_horizontal=bool(c.get("flip_horizontal", False)),
+                    flip_vertical=bool(c.get("flip_vertical", False)),
                 )
             )
         cfg = AppSettings(

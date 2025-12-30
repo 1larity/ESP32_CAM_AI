@@ -110,8 +110,8 @@ def init_camera_widget(self) -> None:
     self.cb_flash.addItems(["Off", "On", "Auto"])
     self.cb_flash.setVisible(False)
     self.s_flash = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
-    self.s_flash.setRange(0, 1023)
-    self.s_flash.setSingleStep(8)
+    self.s_flash.setRange(0, 255)
+    self.s_flash.setSingleStep(4)
     self.s_flash.setFixedWidth(120)
     self.s_flash.setVisible(False)
     self.lbl_flash = QtWidgets.QLabel("0")
@@ -159,10 +159,12 @@ def init_camera_widget(self) -> None:
     self._enrollment = EnrollmentService.instance()
     # Flash state
     self._flash_mode = getattr(self.cam_cfg, "flash_mode", "off") or "off"
-    self._flash_level = int(getattr(self.cam_cfg, "flash_level", 512) or 512)
+    self._flash_level = min(255, max(0, int(getattr(self.cam_cfg, "flash_level", 128) or 128)))
     self._flash_auto_target = int(getattr(self.cam_cfg, "flash_auto_target", 80) or 80)
     self._flash_auto_hyst = int(getattr(self.cam_cfg, "flash_auto_hyst", 15) or 15)
     self._flash_next_auto_ms = 0
+    # Sync with camera-reported flash state to avoid overriding hardware on startup.
+    self._sync_flash_from_camera()
 
     # Prebuffer recorder: per-camera
     self._recorder = PrebufferRecorder(

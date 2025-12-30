@@ -45,10 +45,10 @@ class CameraSettingsDialog(QtWidgets.QDialog):
         self.cb_flash.setCurrentIndex(mode_idx)
 
         self.s_flash = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
-        self.s_flash.setRange(0, 1023)
-        self.s_flash.setSingleStep(8)
-        self.s_flash.setValue(int(getattr(widget, "_flash_level", 512)))
-        self.s_flash.setTickInterval(32)
+        self.s_flash.setRange(0, 255)
+        self.s_flash.setSingleStep(4)
+        self.s_flash.setValue(int(getattr(widget, "_flash_level", 128)))
+        self.s_flash.setTickInterval(8)
         self.s_flash.setTickPosition(QtWidgets.QSlider.TickPosition.TicksBelow)
         layout.addRow("LED mode:", self.cb_flash)
         layout.addRow("LED level:", self._wrap_slider(self.s_flash, width=60))
@@ -69,6 +69,20 @@ class CameraSettingsDialog(QtWidgets.QDialog):
         self.cb_ai_pets = QtWidgets.QCheckBox("Pets")
         self.cb_ai_pets.setChecked(bool(getattr(widget._overlays, "pets", True)))
         layout.addRow(self.cb_ai_pets)
+
+        # Orientation controls
+        self.cb_rotation = QtWidgets.QComboBox()
+        self.cb_rotation.addItems(["0°", "90°", "180°", "270°"])
+        rot = int(getattr(cam_cfg, "rotation_deg", 0) or 0)
+        if rot in (0, 90, 180, 270):
+            self.cb_rotation.setCurrentIndex((0, 90, 180, 270).index(rot))
+        self.cb_flip_h = QtWidgets.QCheckBox("Flip horizontally (mirror)")
+        self.cb_flip_h.setChecked(bool(getattr(cam_cfg, "flip_horizontal", False)))
+        self.cb_flip_v = QtWidgets.QCheckBox("Flip vertically")
+        self.cb_flip_v.setChecked(bool(getattr(cam_cfg, "flip_vertical", False)))
+        layout.addRow("Rotation:", self.cb_rotation)
+        layout.addRow(self.cb_flip_h)
+        layout.addRow(self.cb_flip_v)
 
         # Overlay controls
         self.cb_overlay_det = QtWidgets.QCheckBox("Show detections (boxes + labels)")
@@ -153,6 +167,21 @@ class CameraSettingsDialog(QtWidgets.QDialog):
         self.widget._on_ai_yolo_toggled(ai_yolo)
         self.widget._on_ai_faces_toggled(ai_faces)
         self.widget._on_ai_pets_toggled(ai_pets)
+
+        # Orientation
+        rot_val = (0, 90, 180, 270)[self.cb_rotation.currentIndex()]
+        flip_h = self.cb_flip_h.isChecked()
+        flip_v = self.cb_flip_v.isChecked()
+        changed_orientation = (
+            rot_val != int(getattr(self.cam_cfg, "rotation_deg", 0) or 0)
+            or flip_h != bool(getattr(self.cam_cfg, "flip_horizontal", False))
+            or flip_v != bool(getattr(self.cam_cfg, "flip_vertical", False))
+        )
+        self.cam_cfg.rotation_deg = rot_val
+        self.cam_cfg.flip_horizontal = flip_h
+        self.cam_cfg.flip_vertical = flip_v
+        if changed_orientation:
+            self.widget._on_orientation_changed()
 
         # Overlays
         det_on = self.cb_overlay_det.isChecked()

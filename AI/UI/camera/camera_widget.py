@@ -149,6 +149,32 @@ class CameraWidget(QtWidgets.QWidget):
         dlg.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
         dlg.exec()
 
+    def _sync_flash_from_camera(self) -> None:
+        """
+        Query camera /api/status for flash state and align local mode/level so we
+        don't override the hardware state on startup.
+        """
+        url = self._api_status_url()
+        if not url:
+            return
+        try:
+            auth = None
+            if self.cam_cfg.user and self.cam_cfg.password:
+                auth = requests.auth.HTTPBasicAuth(self.cam_cfg.user, self.cam_cfg.password)
+            resp = requests.get(url, auth=auth, timeout=2.0)
+            resp.raise_for_status()
+            data = resp.json()
+            flash_on = bool(data.get("flash", False))
+            level = int(data.get("flash_level", 0) or 0)
+            level = max(0, min(255, level))
+            self._flash_level = level
+            self.cam_cfg.flash_level = level
+            self._flash_mode = "on" if (flash_on and level > 0) else "off"
+            self.cam_cfg.flash_mode = self._flash_mode
+        except Exception:
+            # Best-effort; keep existing config if camera unreachable.
+            return
+
     def _open_camera_settings(self) -> None:
         dlg = CameraSettingsDialog(self.cam_cfg, self.app_cfg, self, self)
         if dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted:
