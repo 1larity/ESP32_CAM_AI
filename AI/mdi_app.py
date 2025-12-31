@@ -7,6 +7,7 @@ from PySide6  import QtWidgets, QtCore
 from settings import load_settings
 from UI.main_window import MainWindow
 from UI.startup import StartupDialog
+from models import ModelManager
 import utils
 from utils import DebugMode
 
@@ -29,6 +30,7 @@ def main():
     def _cuda_status_probe(dlg: StartupDialog) -> None:
         """Run a quick CUDA availability check and show it on the loader."""
         dlg.update_status("Checking CUDA...")
+        cuda_msg = "Checking CUDA..."
         try:
             import cv2
 
@@ -49,9 +51,25 @@ def main():
                 msg = "CUDA not available; using CPU"
                 if detail:
                     msg += f" ({detail})"
-            dlg.update_status(msg)
+            cuda_msg = msg
+            dlg.update_status(cuda_msg)
         except Exception as e:
-            dlg.update_status(f"CUDA check failed; using CPU ({e})")
+            cuda_msg = f"CUDA check failed; using CPU ({e})"
+            dlg.update_status(cuda_msg)
+
+        # Ensure required models are present (auto-download if missing)
+        def _status_cb(msg: str) -> None:
+            try:
+                dlg.update_status(msg)
+            except Exception:
+                pass
+
+        try:
+            ModelManager.ensure_models(app_cfg, status_cb=_status_cb)
+            # Restore CUDA status after model downloads so the user sees it.
+            dlg.update_status(cuda_msg)
+        except Exception as e:
+            dlg.update_status(f"Model check failed: {e}")
 
     # Show a short loader while wiring camera windows; loader kicks off internally.
     if app_cfg.cameras:

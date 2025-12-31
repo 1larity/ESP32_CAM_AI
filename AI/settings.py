@@ -62,11 +62,12 @@ class AppSettings:
     output_dir: Path = Path("recordings")
     logs_dir: Path = Path("logs")
     detect_interval_ms: int = 500
-    use_gpu: bool = False  # YOLO backend target
+    use_gpu: bool = False  # YOLO/face DNN backend target
     thresh_yolo: float = 0.35
     prebuffer_ms: int = 3000
     yolo_url: Optional[str] = None
     haar_url: Optional[str] = None
+    face_model: Optional[str] = None
     window_geometry: Optional[str] = None  # hex-encoded QByteArray
     window_state: Optional[str] = None     # hex-encoded QByteArray
     window_geometries: Dict[str, List[int]] = field(default_factory=dict)  # cam_name -> [x,y,w,h,maximized]
@@ -128,6 +129,7 @@ def load_settings() -> AppSettings:
             prebuffer_ms=int(raw.get("prebuffer_ms", 3000)),
             yolo_url=raw.get("yolo_url"),
             haar_url=raw.get("haar_url"),
+            face_model=raw.get("face_model"),
             window_geometry=raw.get("window_geometry"),
             window_state=raw.get("window_state"),
             window_geometries=raw.get("window_geometries", {}) or {},
@@ -151,6 +153,9 @@ def load_settings() -> AppSettings:
     cfg.models_dir = _abs_under_base(cfg.models_dir)
     cfg.output_dir = _abs_under_base(cfg.output_dir)
     cfg.logs_dir   = _abs_under_base(cfg.logs_dir)
+    # Default face model to models/face_yunet.onnx if not set
+    if not cfg.face_model:
+        cfg.face_model = str(cfg.models_dir / "face_yunet.onnx")
     return cfg
 
 def save_settings(cfg: AppSettings):
@@ -166,6 +171,7 @@ def save_settings(cfg: AppSettings):
         "prebuffer_ms": cfg.prebuffer_ms,
         "yolo_url": cfg.yolo_url,
         "haar_url": cfg.haar_url,
+        "face_model": str(cfg.face_model) if cfg.face_model else None,
         "window_geometry": cfg.window_geometry,
         "window_state": cfg.window_state,
         "window_geometries": cfg.window_geometries,

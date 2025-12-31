@@ -103,6 +103,64 @@ def run_faces(
     elapsed_ms = int((time.monotonic() - start) * 1000.0)
     return faces_out, elapsed_ms
 
+def run_faces_dnn(
+    bgr: np.ndarray,
+    detector: Optional[object],
+    rec: Optional[object],
+    labels: Dict[int, str],
+    score_threshold: float = 0.85,
+) -> Tuple[List[DetBox], int]:
+    """
+    Run YuNet (FaceDetectorYN) + optional LBPH recognition.
+    Returns (face_boxes, elapsed_ms).
+    """
+    start = time.monotonic()
+    faces_out: List[DetBox] = []
+    if detector is None:
+        return faces_out, 0
+
+    try:
+        # YuNet requires the input size to match the current frame.
+        H, W = bgr.shape[:2]
+        detector.setInputSize((W, H))
+        _, faces = detector.detect(bgr)
+        if faces is None or len(faces) == 0:
+            return faces_out, int((time.monotonic() - start) * 1000.0)
+
+        gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+        for row in faces:
+            x, y, w, h, score = row[:5]
+            if score < score_threshold:
+                continue
+            x1, y1 = int(x), int(y)
+            x2, y2 = int(x + w), int(y + h)
+            name = "face"
+            conf = float(score)
+
+            if rec is not None and labels:
+                try:
+                    roi = gray[y1:y2, x1:x2]
+                    if roi.size > 0:
+                        roi = cv2.resize(roi, (128, 128), interpolation=cv2.INTER_AREA)
+                        pred, dist = rec.predict(roi)
+                        threshold = LBPH_DEFAULT_THRESHOLD
+                        if 0 <= pred and dist <= threshold:
+                            label_name = labels.get(int(pred), "face")
+                            name = label_name
+                            conf = max(0.3, min(1.0, (threshold - dist) / threshold + 0.3))
+                        else:
+                            name = "unknown"
+                            conf = 0.4
+                except Exception as e:
+                    print(f"[LBPH] predict error (DNN faces): {e}")
+
+            faces_out.append(DetBox(name, conf, (x1, y1, x2, y2)))
+    except Exception as e:
+        print(f"[Faces][DNN] error: {e}")
+
+    elapsed_ms = int((time.monotonic() - start) * 1000.0)
+    return faces_out, elapsed_ms
+
 
 def train_lbph_models(face_dir: str, models_dir: str) -> bool:
     """Scan all person folders under face_dir and train LBPH model + labels.

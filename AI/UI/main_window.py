@@ -317,10 +317,6 @@ class MainWindow(QtWidgets.QMainWindow):
         m_tools.addAction("Image manager…").triggered.connect(
             self._open_image_manager
         )
-        m_tools.addSeparator()
-        m_tools.addAction("Fetch default models").triggered.connect(
-            lambda: ModelManager.fetch_defaults(self, self.app_cfg)
-        )
         m_tools.addAction("Face recognizer tuner").triggered.connect(
             lambda: FaceRecTunerDialog(str(self.app_cfg.models_dir), self).exec()
         )

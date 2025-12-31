@@ -5,13 +5,14 @@ from collections import deque
 import time
 from dataclasses import dataclass
 from typing import Optional
+from pathlib import Path
 import cv2
 import numpy as np
 from PySide6 import QtCore
 from PySide6.QtCore import Signal, Slot
 from utils import monotonic_ms, debug
 from .core import run_yolo
-from .lbph import load_lbph, run_faces
+from .lbph import load_lbph, run_faces, run_faces_dnn
 from .packet import DetectionPacket
 
 # Limit concurrent YOLO runs to reduce CPU contention across cameras.
@@ -34,6 +35,7 @@ class DetectorConfig:
     yolo_nms: float = 0.45
     interval_ms: int = 100
     face_cascade: Optional[str] = None
+    face_model: Optional[str] = None
     use_lbph: bool = True
     use_gpu: bool = False
 
@@ -46,6 +48,7 @@ class DetectorConfig:
             yolo_nms=0.45,
             interval_ms=getattr(app_cfg, "detect_interval_ms", 100),
             face_cascade=str((m / "haarcascade_frontalface_default.xml").resolve()),
+            face_model=str(Path(getattr(app_cfg, "face_model", (m / "face_yunet.onnx"))).resolve()),
             use_lbph=not getattr(app_cfg, "ignore_enrollment_models", False),
             use_gpu=bool(getattr(app_cfg, "use_gpu", False)),
         )
@@ -64,6 +67,9 @@ class DetectorThread(QtCore.QThread):
         self._profile_next_ms = 0
         self._backoff_until = 0
         self._last_yolo = None  # (ts_ms, yolo_boxes, pet_boxes)
+        self._face_mode = "none"  # dnn | haar | none
+        self._face_backend = None
+        self._face_target = None
 
         self.models_dir = os.path.dirname(self.cfg.yolo_model)
 
@@ -106,14 +112,44 @@ class DetectorThread(QtCore.QThread):
             print(f"[Detector:{self.name}] YOLO model not found at {self.cfg.yolo_model}")
 
         self._face = None
-        if self.cfg.face_cascade and os.path.exists(self.cfg.face_cascade):
+        self._face_dnn = None
+        if self.cfg.face_model and os.path.exists(self.cfg.face_model):
             try:
-                self._face = cv2.CascadeClassifier(self.cfg.face_cascade)
+                backend = cv2.dnn.DNN_BACKEND_OPENCV
+                target = cv2.dnn.DNN_TARGET_CPU
+                if self.cfg.use_gpu and cuda_ok:
+                    backend = cv2.dnn.DNN_BACKEND_CUDA
+                    target = cv2.dnn.DNN_TARGET_CUDA
+                self._face_dnn = cv2.FaceDetectorYN.create(  # type: ignore[attr-defined]
+                    self.cfg.face_model,
+                    "",
+                    (320, 320),  # updated per frame to match actual size
+                    0.85,
+                    0.3,
+                    5000,
+                    backend,
+                    target,
+                )
+                print(
+                    f"[Detector:{self.name}] YuNet face detector loaded "
+                    f"(backend={self._backend_label(backend)}, target={self._target_label(target)})"
+                )
+                self._face_mode = "dnn"
+                self._face_backend = backend
+                self._face_target = target
             except Exception as e:
-                print(f"[Detector:{self.name}] Haar load failed: {e}")
-                self._face = None
-        else:
-            print(f"[Detector:{self.name}] Haar cascade not found at {self.cfg.face_cascade}")
+                print(f"[Detector:{self.name}] YuNet load failed, falling back to Haar: {e}")
+
+        if self._face_dnn is None:
+            if self.cfg.face_cascade and os.path.exists(self.cfg.face_cascade):
+                try:
+                    self._face = cv2.CascadeClassifier(self.cfg.face_cascade)
+                    self._face_mode = "haar"
+                except Exception as e:
+                    print(f"[Detector:{self.name}] Haar load failed: {e}")
+                    self._face = None
+            else:
+                print(f"[Detector:{self.name}] Haar cascade not found at {self.cfg.face_cascade}")
 
         if self.cfg.use_lbph:
             self._rec, self._labels = load_lbph(self.models_dir)
@@ -124,7 +160,7 @@ class DetectorThread(QtCore.QThread):
 
         print(
             f"[Detector:{self.name}] init: net={'OK' if self._net is not None else 'NONE'}, "
-            f"face={'OK' if self._face is not None else 'NONE'}, "
+            f"face={'DNN' if self._face_dnn is not None else ('OK' if self._face is not None else 'NONE')}, "
             f"lbph={'OK' if self._rec is not None else 'NONE'}, "
             f"yolo_conf={self.cfg.yolo_conf} "
             f"use_gpu={self.cfg.use_gpu}"
@@ -237,7 +273,16 @@ class DetectorThread(QtCore.QThread):
 
             t1 = monotonic_ms()
 
-            if self._face is not None:
+            if self._face_dnn is not None:
+                face_boxes, t_faces = run_faces_dnn(
+                    bgr,
+                    self._face_dnn,
+                    self._rec if self.cfg.use_lbph else None,
+                    self._labels if self.cfg.use_lbph else {},
+                )
+                pkt.faces.extend(face_boxes)
+                pkt.timing_ms["faces_core"] = t_faces
+            elif self._face is not None:
                 # Hot-reload LBPH if models changed on disk (e.g., auto-train/unknowns)
                 if self.cfg.use_lbph:
                     self._maybe_reload_lbph()
@@ -262,13 +307,33 @@ class DetectorThread(QtCore.QThread):
             # Throttled profiling to help diagnose stalls without flooding logs.
             now_ms = monotonic_ms()
             if now_ms >= self._profile_next_ms:
+                face_mode = self._face_mode
+                if face_mode == "dnn":
+                    face_mode = f"dnn({self._backend_label(self._face_backend)}/{self._target_label(self._face_target)})"
                 debug(
                     f"[Detector {self.name}] yolo={len(pkt.yolo)} pets={len(pkt.pets)} "
                     f"faces={len(pkt.faces)} "
                     f"t_yolo={pkt.timing_ms.get('yolo', 0)}ms "
                     f"t_faces={pkt.timing_ms.get('faces', 0)}ms "
-                    f"yolo_skipped={yolo_skipped}"
+                    f"yolo_skipped={yolo_skipped} "
+                    f"face_mode={face_mode}"
                 )
                 self._profile_next_ms = now_ms + 2000
 
             self.resultsReady.emit(pkt)
+
+    @staticmethod
+    def _backend_label(val) -> str:
+        if val == cv2.dnn.DNN_BACKEND_CUDA:
+            return "CUDA"
+        if val == cv2.dnn.DNN_BACKEND_OPENCV:
+            return "CPU"
+        return str(val)
+
+    @staticmethod
+    def _target_label(val) -> str:
+        if val == cv2.dnn.DNN_TARGET_CUDA:
+            return "CUDA"
+        if val == cv2.dnn.DNN_TARGET_CPU:
+            return "CPU"
+        return str(val)
