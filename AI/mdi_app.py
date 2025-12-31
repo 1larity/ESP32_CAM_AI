@@ -1,7 +1,9 @@
-from __future__ import annotations
 
+from __future__ import annotations
+import cv2_dll_fix
+cv2_dll_fix.enable_opencv_cuda_dll_search()
 import sys
-from PySide6  import QtWidgets
+from PySide6  import QtWidgets, QtCore
 from settings import load_settings
 from UI.main_window import MainWindow
 from UI.startup import StartupDialog
@@ -24,6 +26,33 @@ def main():
     app_cfg = load_settings()
     win = MainWindow(app_cfg, load_on_init=False)
 
+    def _cuda_status_probe(dlg: StartupDialog) -> None:
+        """Run a quick CUDA availability check and show it on the loader."""
+        dlg.update_status("Checking CUDA...")
+        try:
+            import cv2
+
+            cuda_ok = False
+            detail = ""
+            if hasattr(cv2, "cuda"):
+                try:
+                    cnt = cv2.cuda.getCudaEnabledDeviceCount()
+                    cuda_ok = bool(cnt and cnt > 0)
+                    detail = f"devices={cnt}"
+                except Exception as e:
+                    detail = str(e)
+            else:
+                detail = "cv2.cuda missing"
+
+            msg = "CUDA detected; GPU acceleration enabled"
+            if not cuda_ok:
+                msg = "CUDA not available; using CPU"
+                if detail:
+                    msg += f" ({detail})"
+            dlg.update_status(msg)
+        except Exception as e:
+            dlg.update_status(f"CUDA check failed; using CPU ({e})")
+
     # Show a short loader while wiring camera windows; loader kicks off internally.
     if app_cfg.cameras:
         try:
@@ -32,6 +61,9 @@ def main():
                 loader=win._add_camera_window,
                 parent=win,
                 version=APP_VERSION,
+                preflight=_cuda_status_probe,
+                initial_status="Starting...",
+                preflight_delay_ms=1000,
             )
             dlg.exec()
         except Exception as e:

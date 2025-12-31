@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 from enum import IntFlag
-import numpy as np, cv2 as cv
+import numpy as np
 from PySide6 import QtGui, QtWidgets, QtCore
 
 
@@ -62,6 +62,8 @@ def debug(msg: str) -> None:
 
 
 def qimage_from_bgr(bgr: np.ndarray) -> QtGui.QImage:
+    import cv2 as cv  # Lazy import so we don't load OpenCV until needed.
+
     h, w = bgr.shape[:2]
     rgb = cv.cvtColor(bgr, cv.COLOR_BGR2RGB)
     bpl = int(rgb.strides[0])

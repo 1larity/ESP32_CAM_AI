@@ -62,6 +62,7 @@ class AppSettings:
     output_dir: Path = Path("recordings")
     logs_dir: Path = Path("logs")
     detect_interval_ms: int = 500
+    use_gpu: bool = False  # YOLO backend target
     thresh_yolo: float = 0.35
     prebuffer_ms: int = 3000
     yolo_url: Optional[str] = None
@@ -122,6 +123,7 @@ def load_settings() -> AppSettings:
             output_dir=Path(raw.get("output_dir", "recordings")),
             logs_dir=Path(raw.get("logs_dir", "logs")),
             detect_interval_ms=int(raw.get("detect_interval_ms", 500)),
+            use_gpu=bool(raw.get("use_gpu", False)),
             thresh_yolo=float(raw.get("thresh_yolo", 0.35)),
             prebuffer_ms=int(raw.get("prebuffer_ms", 3000)),
             yolo_url=raw.get("yolo_url"),
@@ -159,6 +161,7 @@ def save_settings(cfg: AppSettings):
         "output_dir": str(Path(cfg.output_dir).resolve().relative_to(BASE_DIR) if str(cfg.output_dir).startswith(str(BASE_DIR)) else str(cfg.output_dir)),
         "logs_dir":   str(Path(cfg.logs_dir).resolve().relative_to(BASE_DIR) if str(cfg.logs_dir).startswith(str(BASE_DIR)) else str(cfg.logs_dir)),
         "detect_interval_ms": cfg.detect_interval_ms,
+        "use_gpu": cfg.use_gpu,
         "thresh_yolo": cfg.thresh_yolo,
         "prebuffer_ms": cfg.prebuffer_ms,
         "yolo_url": cfg.yolo_url,

@@ -23,6 +23,9 @@ try:
 except Exception:
     pass
 
+# Gate to avoid spamming CUDA status messages across many cameras.
+_CUDA_STATUS_PRINTED = False
+
 
 @dataclass
 class DetectorConfig:
@@ -32,6 +35,7 @@ class DetectorConfig:
     interval_ms: int = 100
     face_cascade: Optional[str] = None
     use_lbph: bool = True
+    use_gpu: bool = False
 
     @classmethod
     def from_app(cls, app_cfg):
@@ -43,6 +47,7 @@ class DetectorConfig:
             interval_ms=getattr(app_cfg, "detect_interval_ms", 100),
             face_cascade=str((m / "haarcascade_frontalface_default.xml").resolve()),
             use_lbph=not getattr(app_cfg, "ignore_enrollment_models", False),
+            use_gpu=bool(getattr(app_cfg, "use_gpu", False)),
         )
 
 
@@ -62,12 +67,38 @@ class DetectorThread(QtCore.QThread):
 
         self.models_dir = os.path.dirname(self.cfg.yolo_model)
 
+        cuda_ok = False
+        if self.cfg.use_gpu:
+            cuda_ok = self._cuda_supported()
+            global _CUDA_STATUS_PRINTED
+            if not _CUDA_STATUS_PRINTED:
+                msg = (
+                    "CUDA detected; will use GPU for YOLO where possible"
+                    if cuda_ok
+                    else "CUDA not available; using CPU for YOLO"
+                )
+                print(f"[Detector] {msg}")
+                _CUDA_STATUS_PRINTED = True
+
         self._net = None
         if os.path.exists(self.cfg.yolo_model):
             try:
                 self._net = cv2.dnn.readNetFromONNX(self.cfg.yolo_model)
-                self._net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
-                self._net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+                backend = cv2.dnn.DNN_BACKEND_OPENCV
+                target = cv2.dnn.DNN_TARGET_CPU
+                if self.cfg.use_gpu and cuda_ok:
+                    try:
+                        backend = cv2.dnn.DNN_BACKEND_CUDA
+                        target = cv2.dnn.DNN_TARGET_CUDA
+                        self._net.setPreferableBackend(backend)
+                        self._net.setPreferableTarget(target)
+                        print(f"[Detector:{self.name}] using CUDA backend for YOLO")
+                    except Exception as e:
+                        print(f"[Detector:{self.name}] CUDA not available, falling back to CPU: {e}")
+                        backend = cv2.dnn.DNN_BACKEND_OPENCV
+                        target = cv2.dnn.DNN_TARGET_CPU
+                self._net.setPreferableBackend(backend)
+                self._net.setPreferableTarget(target)
             except Exception as e:
                 print(f"[Detector:{self.name}] YOLO load failed: {e}")
                 self._net = None
@@ -95,7 +126,8 @@ class DetectorThread(QtCore.QThread):
             f"[Detector:{self.name}] init: net={'OK' if self._net is not None else 'NONE'}, "
             f"face={'OK' if self._face is not None else 'NONE'}, "
             f"lbph={'OK' if self._rec is not None else 'NONE'}, "
-            f"yolo_conf={self.cfg.yolo_conf}"
+            f"yolo_conf={self.cfg.yolo_conf} "
+            f"use_gpu={self.cfg.use_gpu}"
         )
 
     def _lbph_models_mtime(self) -> float:
@@ -115,6 +147,21 @@ class DetectorThread(QtCore.QThread):
                 print(f"[Detector:{self.name}] reloaded LBPH models (labels={len(self._labels)})")
         except Exception:
             pass
+
+    def _cuda_supported(self) -> bool:
+        try:
+            info = cv2.getBuildInformation()
+            if "CUDA" not in info.upper():
+                return False
+            if not hasattr(cv2, "cuda"):
+                return False
+            try:
+                count = cv2.cuda.getCudaEnabledDeviceCount()
+            except Exception:
+                return False
+            return bool(count and count > 0)
+        except Exception:
+            return False
 
     def submit_frame(self, *args) -> None:
         if len(args) == 2:

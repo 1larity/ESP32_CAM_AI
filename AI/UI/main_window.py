@@ -336,6 +336,12 @@ class MainWindow(QtWidgets.QMainWindow):
         act_ignore.toggled.connect(self._on_ignore_enroll_toggled)
         m_tools.addAction(act_ignore)
 
+        act_gpu = QtGui.QAction("Use GPU for YOLO (requires CUDA build)", self)
+        act_gpu.setCheckable(True)
+        act_gpu.setChecked(bool(getattr(self.app_cfg, "use_gpu", False)))
+        act_gpu.toggled.connect(self._on_use_gpu_toggled)
+        m_tools.addAction(act_gpu)
+
         act_archive = QtGui.QAction("Archive person/pet and rebuild", self)
         act_archive.triggered.connect(self._archive_person_folder)
         m_tools.addAction(act_archive)
@@ -440,6 +446,15 @@ class MainWindow(QtWidgets.QMainWindow):
             self,
             "Ignore Enrollment Models",
             "Setting will take effect on next detector restart. Restart app to reload without LBPH.",
+        )
+
+    def _on_use_gpu_toggled(self, checked: bool) -> None:
+        self.app_cfg.use_gpu = bool(checked)
+        save_settings(self.app_cfg)
+        QtWidgets.QMessageBox.information(
+            self,
+            "YOLO GPU",
+            "Setting will take effect on next detector restart. Restart the app to switch backend.",
         )
 
     @Slot(bool)

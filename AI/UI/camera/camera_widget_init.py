@@ -3,18 +3,20 @@
 
 from __future__ import annotations
 from PySide6 import QtCore, QtWidgets
-from detectors import DetectorThread, DetectorConfig
-from recorder import PrebufferRecorder
-from presence import PresenceBus
-from stream import StreamCapture
-from enrollment import EnrollmentService
-from face_params import FaceParams
 from ..graphics_view import GraphicsView
 from ..overlays import OverlayFlags
 
 
 def init_camera_widget(self) -> None:
     """Build per-camera UI, backend helpers and signal wiring."""
+
+    # Heavy imports (cv2/CUDA) are deferred until the loader dialog is visible.
+    from detectors import DetectorThread, DetectorConfig
+    from recorder import PrebufferRecorder
+    from presence import PresenceBus
+    from stream import StreamCapture
+    from enrollment import EnrollmentService
+    from face_params import FaceParams
 
     # ------------------------------------------------------------------
     # Scene + view

@@ -18,6 +18,9 @@ class StartupDialog(QtWidgets.QDialog):
         loader: Callable[[object], None],
         parent: QtWidgets.QWidget | None = None,
         version: str | None = None,
+        preflight: Callable[["StartupDialog"], None] | None = None,
+        initial_status: str | None = None,
+        preflight_delay_ms: int = 0,
     ) -> None:
         super().__init__(parent)
         self.setWindowFlags(
@@ -45,6 +48,9 @@ class StartupDialog(QtWidgets.QDialog):
         self._idx = 0
         self._started = False
         self.version = version
+        self._preflight = preflight
+        self._initial_status = initial_status
+        self._preflight_delay_ms = max(0, int(preflight_delay_ms))
 
         self._build_ui()
 
@@ -120,7 +126,7 @@ class StartupDialog(QtWidgets.QDialog):
         overlay_lay.addLayout(top_lay)
         overlay_lay.addStretch(1)
 
-        self.lbl_status = QtWidgets.QLabel("Preparing...", self.overlay)
+        self.lbl_status = QtWidgets.QLabel(self._initial_status or "Preparing...", self.overlay)
         self.lbl_status.setObjectName("status")
         self.lbl_status.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         self.lbl_status.setSizePolicy(
@@ -170,7 +176,12 @@ class StartupDialog(QtWidgets.QDialog):
         if not self._started:
             self._started = True
             self.pb.setMaximum(max(1, len(self.cams)))
-            QtCore.QTimer.singleShot(0, self._tick)
+            if self._preflight:
+                try:
+                    self._preflight(self)
+                except Exception:
+                    pass
+            QtCore.QTimer.singleShot(self._preflight_delay_ms, self._tick)
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # type: ignore[override]
         super().closeEvent(event)
@@ -194,3 +205,8 @@ class StartupDialog(QtWidgets.QDialog):
 
         self._idx += 1
         QtCore.QTimer.singleShot(0, self._tick)
+
+    def update_status(self, text: str) -> None:
+        """Update status label and process events so it paints immediately."""
+        self.lbl_status.setText(text)
+        QtWidgets.QApplication.processEvents(QtCore.QEventLoop.ProcessEventsFlag.AllEvents)

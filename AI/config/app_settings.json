@@ -3,11 +3,12 @@
   "output_dir": "recordings",
   "logs_dir": "logs",
   "detect_interval_ms": 300,
+  "use_gpu": true,
   "thresh_yolo": 0.35,
   "prebuffer_ms": 3000,
   "yolo_url": null,
   "haar_url": null,
-  "window_geometry": "01d9d0cb000300000000017c000000d800000922000004b60000017c000000f700000922000004b600000000000000000a000000017c000000f700000922000004b6",
+  "window_geometry": "01d9d0cb0003000000000158000000e7000008fe000004c50000015800000106000008fe000004c500000000000000000a000000015800000106000008fe000004c5",
   "window_state": "000000ff00000000fd00000001000000010000011b000003aafc0200000001fb00000014006500760065006e007400730044006f0063006b0100000016000003aa0000009100ffffff00000688000003aa00000004000000040000000800000008fc00000000",
   "window_geometries": {
     "cam1": [
@@ -42,11 +43,11 @@
       "stream_url": "http://192.168.1.130:81/stream",
       "user": "sysadm",
       "token": null,
-      "flash_mode": "off",
-      "flash_level": 0,
+      "flash_mode": "auto",
+      "flash_level": 255,
       "flash_auto_target": 80,
       "flash_auto_hyst": 15,
-      "record_motion": true,
+      "record_motion": false,
       "motion_sensitivity": 77,
       "ai_enabled": true,
       "ai_yolo": true,
@@ -55,7 +56,7 @@
       "rotation_deg": 0,
       "flip_horizontal": false,
       "flip_vertical": false,
-      "password_enc": "9oF+mW2lEot8U0juHy6kGUgsvkXER2DpT1DLFIcgpxn+qlwCR+Z9PaDIi+wvq0pQR0+iak8="
+      "password_enc": "gAibq+0sltaCuEDrVdnP1bEHV1qtagX9nxvqLt93IUZgmIg4t1gU/muyz15EJYq+Z72kwIE="
     },
     {
       "name": "Cam-2",
@@ -75,7 +76,7 @@
       "rotation_deg": 0,
       "flip_horizontal": false,
       "flip_vertical": false,
-      "password_enc": "X81NshVzyE/HjljGDRCR1y+0UcTHug52/7Xj3MHa5Jk1wvJ856NOVS2zLPhBdRDnnRcXjBs="
+      "password_enc": "2mIOKZ/JQBuGEBri6XFDueudo07I+KVH5oZwR2RgFp4Sre+9RWv98Da/CvVOe2I/TT+YPGk="
     }
   ]
 }
