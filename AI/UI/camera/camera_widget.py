@@ -54,10 +54,12 @@ class CameraWidget(QtWidgets.QWidget):
         cam_cfg: CameraSettings,
         app_cfg: AppSettings,
         parent: Optional[QtWidgets.QWidget] = None,
+        mqtt_service=None,
     ) -> None:
         super().__init__(parent)
         self.cam_cfg = cam_cfg
         self.app_cfg = app_cfg
+        self._mqtt = mqtt_service
 
         # IMPORTANT:
         # Ensure injected methods (including _on_detections) exist BEFORE init_camera_widget()

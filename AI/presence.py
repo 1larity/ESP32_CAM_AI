@@ -4,17 +4,19 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from typing import Dict, Set, Tuple
+from typing import Dict, Set, Tuple, Optional
 from detectors import DetectionPacket
 from utils import ensure_dir
 
 class PresenceBus:
-    def __init__(self, cam_name: str, logs_dir: Path, ttl_ms: int = 6000):
+    def __init__(self, cam_name: str, logs_dir: Path, ttl_ms: int = 6000, mqtt=None, mqtt_topic: Optional[str] = None):
         self.cam = cam_name
         self.logs_dir = Path(logs_dir)
         self.ttl = ttl_ms
         self.last_seen: Dict[str, int] = {}
         self.present: Set[str] = set()
+        self._mqtt = mqtt
+        self._mqtt_topic = mqtt_topic or cam_name.replace(" ", "_")
 
     def update(self, pkt: DetectionPacket):
         now = pkt.ts_ms
@@ -44,12 +46,14 @@ class PresenceBus:
             if now - self.last_seen.get(k, 0) > self.ttl:
                 self.present.remove(k)
                 self._write(self._rec_payload(now, k, "exit"))
+                self._publish_state(k, False)
 
         # enter events
         for k in seen:
             if k not in self.present:
                 self.present.add(k)
                 self._write(self._rec_payload(now, k, "enter"))
+                self._publish_state(k, True)
 
     def _write(self, rec: Dict):
         ensure_dir(self.logs_dir)
@@ -69,3 +73,22 @@ class PresenceBus:
             base_type = "person"
             label = key.split(":", 1)[1]
         return {"ts": ts_wall, "camera": self.cam, "event": event, "type": base_type, "label": label}
+
+    def _publish_state(self, key: str, is_on: bool) -> None:
+        if self._mqtt is None or not getattr(self._mqtt, "connected", False):
+            return
+        base_type = key
+        label = None
+        if key.startswith("person:"):
+            base_type = "person"
+            label = key.split(":", 1)[1]
+        payload = "ON" if is_on else "OFF"
+        topic_base = self._mqtt_topic or self.cam
+        try:
+            self._mqtt.publish(f"{topic_base}/presence/{base_type}", payload, retain=True)
+            if base_type in ("dog", "cat"):
+                self._mqtt.publish(f"{topic_base}/presence/pet", payload, retain=True)
+            if label:
+                self._mqtt.publish(f"{topic_base}/presence/person/{label}", payload, retain=True)
+        except Exception as e:
+            print(f"[MQTT] presence publish error: {e}")

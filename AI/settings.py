@@ -84,6 +84,20 @@ class AppSettings:
     record_unknown_pet: bool = False
     record_motion: bool = False
     motion_sensitivity: int = 50  # 0-100
+    # MQTT / Home Assistant
+    mqtt_enabled: bool = False
+    mqtt_host: Optional[str] = None
+    mqtt_port: int = 8883
+    mqtt_client_id: Optional[str] = None
+    mqtt_tls: bool = True
+    mqtt_ca_path: Optional[str] = None
+    mqtt_insecure: bool = False
+    mqtt_keepalive: int = 60
+    mqtt_base_topic: str = "esp32_cam_ai"
+    mqtt_discovery_prefix: str = "homeassistant"
+    mqtt_user: Optional[str] = None
+    # mqtt_password is kept in memory only; persisted as mqtt_password_enc
+    mqtt_password: Optional[str] = None
 
 def load_settings() -> AppSettings:
     if SETTINGS_FILE.exists():
@@ -145,6 +159,18 @@ def load_settings() -> AppSettings:
             record_unknown_pet=bool(raw.get("record_unknown_pet", False)),
             record_motion=bool(raw.get("record_motion", False)),
             motion_sensitivity=int(raw.get("motion_sensitivity", 50)),
+            mqtt_enabled=bool(raw.get("mqtt_enabled", False)),
+            mqtt_host=raw.get("mqtt_host"),
+            mqtt_port=int(raw.get("mqtt_port", 8883)),
+            mqtt_client_id=raw.get("mqtt_client_id"),
+            mqtt_tls=bool(raw.get("mqtt_tls", True)),
+            mqtt_ca_path=raw.get("mqtt_ca_path"),
+            mqtt_insecure=bool(raw.get("mqtt_insecure", False)),
+            mqtt_keepalive=int(raw.get("mqtt_keepalive", 60)),
+            mqtt_base_topic=raw.get("mqtt_base_topic", "esp32_cam_ai"),
+            mqtt_discovery_prefix=raw.get("mqtt_discovery_prefix", "homeassistant"),
+            mqtt_user=raw.get("mqtt_user"),
+            mqtt_password=decrypt(raw.get("mqtt_password_enc", "") or "")[1] if raw.get("mqtt_password_enc") else None,
         )
     else:
         cfg = AppSettings()
@@ -186,6 +212,18 @@ def save_settings(cfg: AppSettings):
         "record_unknown_pet": cfg.record_unknown_pet,
         "record_motion": cfg.record_motion,
         "motion_sensitivity": cfg.motion_sensitivity,
+        "mqtt_enabled": cfg.mqtt_enabled,
+        "mqtt_host": cfg.mqtt_host,
+        "mqtt_port": cfg.mqtt_port,
+        "mqtt_client_id": cfg.mqtt_client_id,
+        "mqtt_tls": cfg.mqtt_tls,
+        "mqtt_ca_path": cfg.mqtt_ca_path,
+        "mqtt_insecure": cfg.mqtt_insecure,
+        "mqtt_keepalive": cfg.mqtt_keepalive,
+        "mqtt_base_topic": cfg.mqtt_base_topic,
+        "mqtt_discovery_prefix": cfg.mqtt_discovery_prefix,
+        "mqtt_user": cfg.mqtt_user,
+        "mqtt_password_enc": encrypt(cfg.mqtt_password) if cfg.mqtt_password else None,
         "cameras": [],
     }
     # Write cameras with encrypted password; avoid persisting plaintext.

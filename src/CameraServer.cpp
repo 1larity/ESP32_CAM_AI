@@ -57,22 +57,19 @@ static bool g_flash_on = false;
 static int  g_flash_level = 0;  // 0-1023 (10-bit PWM)
 
 static void setFlash(bool on) {
-  g_flash_on = on;
-  if (g_flash_on) {
-    g_flash_level = (g_flash_level > 0) ? g_flash_level : 1023;
-    ledcWrite(1, g_flash_level);
-  } else {
-    g_flash_level = 0;
-    ledcWrite(1, 0);
-  }
+  // Flash disabled to avoid interfering with the stream.
+  (void)on;
+  g_flash_on = false;
+  g_flash_level = 0;
+  digitalWrite(FLASH_LED_PIN, LOW);
 }
 
 static void setFlashLevel(int level) {
-  if (level < 0) level = 0;
-  if (level > 1023) level = 1023;
-  g_flash_level = level;
-  g_flash_on = (level > 0);
-  ledcWrite(1, level);
+  // Flash disabled to avoid interfering with the stream.
+  (void)level;
+  g_flash_on = false;
+  g_flash_level = 0;
+  digitalWrite(FLASH_LED_PIN, LOW);
 }
 
 void setupCamera() {
@@ -117,10 +114,9 @@ void setupCamera() {
     return;
   }
 
-  // Flash PWM: use LEDC channel 1 / timer 1 (camera uses channel 0 / timer 0)
-  ledcSetup(1, 20000, 10);          // 20 kHz, 10-bit to reduce visible flicker
-  ledcAttachPin(FLASH_LED_PIN, 1);
-  ledcWrite(1, 0);
+  // Force flash pin off (no PWM setup to avoid stream interference).
+  pinMode(FLASH_LED_PIN, OUTPUT);
+  digitalWrite(FLASH_LED_PIN, LOW);
 
   // Apply persisted framesize if present
   framesize_t fs = config.frame_size;
@@ -128,14 +124,10 @@ void setupCamera() {
   if (camPrefs.isKey(KEY_RES)) {
     fs = (framesize_t)camPrefs.getUChar(KEY_RES, (uint8_t)config.frame_size);
   }
-  bool flash_on = camPrefs.getBool(KEY_FLASH, false);
-  int flash_level = camPrefs.getInt(KEY_FLASH_LEVEL, flash_on ? 1023 : 0);
   camPrefs.end();
 
   sensor_t* s = esp_camera_sensor_get();
   if (s) s->set_framesize(s, fs);
-  if (flash_on && flash_level == 0) flash_level = 255;
-  setFlashLevel(flash_level);
 
   // Start port-81 MJPEG stream server
   startStreamServer();
@@ -211,8 +203,6 @@ static void renderCameraPage(AsyncWebServerRequest* request) {
           "<button class='btn' onclick=\"fetch('/ptz/step?dx=-10')\">Left</button> "
           "<button class='btn' onclick=\"fetch('/ptz/step?dx=10')\">Right</button>"
           "</div>";
-  html += "<div class='row'><label><input id='flash' type='checkbox'> Flash</label> "
-          "<input id='flash_level' type='range' min='0' max='1023' step='8' style='width:200px'></div>";
   html += "</div>";
 
   // Live video
@@ -226,21 +216,10 @@ static void renderCameraPage(AsyncWebServerRequest* request) {
   html += "</div>";
 
   // Status block
-  html += "<div class='panel'><h3>Status</h3><pre id='st'>Loading…</pre></div>"
+  html += "<div class='panel'><h3>Status</h3><pre id='st'>Loading...</pre></div>"
           "<script>"
-          "function applyStatus(j){"
-          "document.getElementById('st').textContent=JSON.stringify(j,null,2);"
-          "if(j){"
-          "if(j.flash!==undefined){document.getElementById('flash').checked=!!j.flash;}"
-          "if(j.flash_level!==undefined){document.getElementById('flash_level').value=j.flash_level;}"
-          "document.getElementById('flash_level').disabled=!document.getElementById('flash').checked;"
-          "}"
-          "}"
-          "function setFlash(on){fetch('/api/flash?on='+(on?1:0)).then(()=>fetch('/api/status').then(r=>r.json()).then(applyStatus));}"
-          "function setFlashLevel(v){fetch('/api/flash?level='+v).then(()=>fetch('/api/status').then(r=>r.json()).then(applyStatus));}"
+          "function applyStatus(j){document.getElementById('st').textContent=JSON.stringify(j,null,2);}"
           "fetch('/api/status').then(r=>r.json()).then(applyStatus);"
-          "document.getElementById('flash').addEventListener('change',e=>{setFlash(e.target.checked); document.getElementById('flash_level').disabled=!e.target.checked;});"
-          "document.getElementById('flash_level').addEventListener('change',e=>setFlashLevel(e.target.value));"
           "</script>";
 
   html += "</div></body></html>";
@@ -278,32 +257,6 @@ void startCameraServer() {
     req->send(200, "text/plain", "OK");
   });
 
-  // Flash control (on/off or level)
-  srv.on("/api/flash", HTTP_GET, [](AsyncWebServerRequest* req){
-    if (!isAuthorized(req)) { send401(req); return; }
-    Preferences prefs; prefs.begin(CAM_NS, false);
-
-    if (req->hasParam("level")) {
-      int lvl = req->getParam("level")->value().toInt();
-      setFlashLevel(lvl);
-      prefs.putInt(KEY_FLASH_LEVEL, lvl);
-      prefs.putBool(KEY_FLASH, lvl > 0);
-    } else if (req->hasParam("on")) {
-      bool on = req->getParam("on")->value().toInt() ? true : false;
-      setFlash(on);
-      prefs.putBool(KEY_FLASH, on);
-      prefs.putInt(KEY_FLASH_LEVEL, on ? 1023 : 0);
-    } else {
-      prefs.end();
-      req->send(400, "text/plain", "Missing ?level= or ?on=");
-      return;
-    }
-    prefs.end();
-    char buf[64];
-    snprintf(buf, sizeof(buf), "{\"flash\":%d,\"flash_level\":%d}", g_flash_on ? 1 : 0, g_flash_level);
-    req->send(200, "application/json", buf);
-  });
-
   // Composite status JSON for page
   srv.on("/api/status", HTTP_GET, [](AsyncWebServerRequest* req){
     if (!isAuthorized(req)) { send401(req); return; }
@@ -316,14 +269,10 @@ void startCameraServer() {
       "{"
       "\"ip\":\"%s\","
       "\"framesize\":%d,"
-      "\"flash\":%d,"
-      "\"flash_level\":%d,"
       "\"ptz\":{\"pan\":%d,\"tilt\":%d}"
       "}",
       WiFi.localIP().toString().c_str(),
       (int)fs,
-      g_flash_on ? 1 : 0,
-      g_flash_level,
       pan, tilt);
     req->send(200, "application/json", buf);
   });

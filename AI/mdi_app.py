@@ -10,6 +10,7 @@ from UI.startup import StartupDialog
 from models import ModelManager
 import utils
 from utils import DebugMode
+from mqtt_client import MqttService
 
 # Enable debug (prints + logs to AI/logs/debug.log)
 #Only print: utils.DEBUG_MODE = DebugMode.PRINT
@@ -25,7 +26,9 @@ def main():
     app = QtWidgets.QApplication(sys.argv)
     app.setApplicationName("ESP32-CAM AI Viewer")
     app_cfg = load_settings()
-    win = MainWindow(app_cfg, load_on_init=False)
+    mqtt = MqttService(app_cfg)
+    mqtt.start()
+    win = MainWindow(app_cfg, load_on_init=False, mqtt_service=mqtt)
 
     def _cuda_status_probe(dlg: StartupDialog) -> None:
         """Run a quick CUDA availability check and show it on the loader."""

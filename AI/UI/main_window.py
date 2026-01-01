@@ -15,8 +15,10 @@ from UI.discovery_dialog import DiscoveryDialog
 from UI.ip_cam_dialog import AddIpCameraDialog
 from UI.camera import CameraWidget
 from UI.face_tuner import FaceRecTunerDialog
+from UI.mqtt_settings import MqttSettingsDialog
 from UI.unknown_capture_dialog import UnknownCaptureDialog
 from enrollment import get_enrollment_service
+from ha_discovery import publish_discovery
 
 
 class _FaceRebuildWorker(QtCore.QObject):
@@ -34,9 +36,10 @@ class _FaceRebuildWorker(QtCore.QObject):
 
 
 class MainWindow(QtWidgets.QMainWindow):
-    def __init__(self, app_cfg: AppSettings, *, load_on_init: bool = True):
+    def __init__(self, app_cfg: AppSettings, *, load_on_init: bool = True, mqtt_service=None):
         super().__init__()
         self.app_cfg = app_cfg
+        self._mqtt = mqtt_service
 
         # Background face rebuild state
         self._face_rebuild_thread: Optional[QtCore.QThread] = None
@@ -77,6 +80,16 @@ class MainWindow(QtWidgets.QMainWindow):
                 pass
 
         self._build_menus()
+        if self._mqtt is not None:
+            disc_fn = lambda _=None: publish_discovery(
+                self._mqtt,
+                self.app_cfg.cameras,
+                getattr(self.app_cfg, "mqtt_discovery_prefix", "homeassistant"),
+                getattr(self._mqtt, "base_topic", getattr(self.app_cfg, "mqtt_base_topic", "esp32_cam_ai")),
+            )
+            self._mqtt.add_on_connect(lambda _: disc_fn())
+            if getattr(self._mqtt, "connected", False):
+                disc_fn()
         if load_on_init:
             self._load_initial_cameras()
 
@@ -90,7 +103,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _add_camera_window(self, cam_cfg: CameraSettings) -> None:
         try:
-            w = CameraWidget(cam_cfg, self.app_cfg, self)
+            w = CameraWidget(cam_cfg, self.app_cfg, self, mqtt_service=self._mqtt)
         except Exception as e:
             print(f"[MainWindow] Failed to init camera {getattr(cam_cfg, 'name', '')}: {e}")
             return
@@ -189,6 +202,11 @@ class MainWindow(QtWidgets.QMainWindow):
             w = sub.widget()
             if isinstance(w, CameraWidget):
                 w.stop()
+        if self._mqtt is not None:
+            try:
+                self._mqtt.stop()
+            except Exception:
+                pass
         try:
             self.app_cfg.window_geometry = bytes(self.saveGeometry().toHex()).decode()
             self.app_cfg.window_state = bytes(self.saveState().toHex()).decode()
@@ -225,6 +243,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _open_discovery(self) -> None:
         dlg = DiscoveryDialog(self.app_cfg, self)
+        dlg.exec()
+
+    def _open_mqtt_settings(self) -> None:
+        dlg = MqttSettingsDialog(self.app_cfg, self)
         dlg.exec()
 
     def _remove_camera_dialog(self) -> None:
@@ -309,6 +331,10 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         m_tools.addAction("Open logs folder").triggered.connect(
             lambda: open_folder_or_warn(self, self.app_cfg.logs_dir)
+        )
+        m_tools.addSeparator()
+        m_tools.addAction("MQTT Settings").triggered.connect(
+            self._open_mqtt_settings
         )
         m_tools.addSeparator()
         m_tools.addAction("Enroll faces / pets…").triggered.connect(
