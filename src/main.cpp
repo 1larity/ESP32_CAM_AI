@@ -2,7 +2,7 @@
 #include "Arduino.h"
 #include "WiFiManager.h"
 #include "CameraServer.h"
-#include "OTAHandler.h"
+#include <ArduinoOTA.h>
 #include "Utils.h"
 #include "PTZ.h"  
 
@@ -36,13 +36,13 @@ void setup() {
   startCameraServer();
 
   Serial.println("Init OTA...");
-  setupOTA();
+  ArduinoOTA.begin();
   g_otaReady = true;
   Serial.println("Setup complete");
 }
 
 void loop() {
   if (!g_inConfigPortal && g_otaReady) {
-      handleOTA();
+      ArduinoOTA.handle();;
   }
 }
