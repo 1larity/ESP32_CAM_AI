@@ -59,8 +59,10 @@ def attach_view_handlers(cls) -> None:
         overhead_w = widget_size.width() - view_size.width()
         overhead_h = widget_size.height() - view_size.height()
 
-        desired_widget_w = logical_w + overhead_w
-        desired_widget_h = logical_h + overhead_h
+        # Add a few pixels of padding so scrollbars don't appear due to rounding/decorations.
+        pad = 6
+        desired_widget_w = logical_w + overhead_w + pad
+        desired_widget_h = logical_h + overhead_h + pad
 
         # Find the QMdiSubWindow container, if any
         sub = _find_mdi_subwindow(self)
@@ -154,9 +156,15 @@ def attach_view_handlers(cls) -> None:
             return
 
         visible_rect = view.mapToScene(view.viewport().rect()).boundingRect()
-        scene_rect = self._scene.sceneRect()
+        # Use the pixmap bounds rather than full sceneRect to avoid oversized scene padding
+        scene_rect = self._pixmap_item.sceneBoundingRect()
 
-        if visible_rect.contains(scene_rect):
+        # Allow for minor float rounding; treat as contained if viewport is at least scene size minus epsilon.
+        epsilon = 2.0
+        if (
+            visible_rect.width() + epsilon >= scene_rect.width()
+            and visible_rect.height() + epsilon >= scene_rect.height()
+        ):
             view.setHorizontalScrollBarPolicy(
                 QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff
             )

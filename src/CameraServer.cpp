@@ -8,6 +8,7 @@
 #include <Preferences.h>
 #include "StreamServer.h"
 #include "PTZ.h"
+#include "RtspServer.h"
 #include "esp_system.h"
 #include "esp_heap_caps.h"
 
@@ -23,6 +24,8 @@ static const char* CAM_NS  = "camera";
 static const char* KEY_RES = "res";
 static const char* KEY_FLASH = "flash";
 static const char* KEY_FLASH_LEVEL = "flash_level";
+static const char* KEY_RTSP_ENABLE = "rtsp_on";
+static const char* KEY_RTSP_PORT = "rtsp_port";
 
 static const ResolutionOption resolutionOptions[] = {
   {FRAMESIZE_XGA,   "XGA",    1024,768},
@@ -55,6 +58,8 @@ static const ResolutionOption resolutionOptions[] = {
 
 static bool g_flash_on = false;
 static int  g_flash_level = 0;  // 0-1023 (10-bit PWM)
+static bool g_rtsp_enabled = false;
+static uint16_t g_rtsp_port = 8554;
 
 static void setFlash(bool on) {
   // Flash disabled to avoid interfering with the stream.
@@ -125,12 +130,18 @@ void setupCamera() {
     fs = (framesize_t)camPrefs.getUChar(KEY_RES, (uint8_t)config.frame_size);
   }
   camPrefs.end();
+  // Load RTSP preference
+  camPrefs.begin(CAM_NS, true);
+  g_rtsp_enabled = camPrefs.getBool(KEY_RTSP_ENABLE, false);
+  g_rtsp_port = camPrefs.getUShort(KEY_RTSP_PORT, 8554);
+  camPrefs.end();
 
   sensor_t* s = esp_camera_sensor_get();
   if (s) s->set_framesize(s, fs);
 
   // Start port-81 MJPEG stream server
-  startStreamServer();
+  if (g_rtsp_enabled) startRtspServer(g_rtsp_port);
+  else startStreamServer();
 
   Serial.println("Camera ready");
 }
@@ -203,6 +214,12 @@ static void renderCameraPage(AsyncWebServerRequest* request) {
           "<button class='btn' title='Nudge camera left' onclick=\"fetch('/ptz/step?dx=-10')\">Left</button> "
           "<button class='btn' title='Nudge camera right' onclick=\"fetch('/ptz/step?dx=10')\">Right</button>"
           "</div>";
+  html += "<div class='row'><label for='rtsp'>RTSP (replaces MJPEG)</label>"
+          "<input id='rtsp' type='checkbox' title='Enable RTSP instead of MJPEG HTTP'>"
+          "<label for='rtsp_port'>Port</label>"
+          "<input id='rtsp_port' type='number' min='1024' max='65535' value='8554' style='width:100px' title='RTSP port'>"
+          "<button class='btn' title='Apply streaming mode (restarts device)' onclick='applyRtsp()'>Apply</button>"
+          "</div>";
   html += "</div>";
 
   // Live video
@@ -212,13 +229,28 @@ static void renderCameraPage(AsyncWebServerRequest* request) {
     String tok = getAuthTokenParam();
     if (tok.length() > 0) streamURL += "?token=" + tok;
   }
-  html += "<img class='stream' src='" + streamURL + "' alt='Video stream' title='Live MJPEG stream'>";
+  if (g_rtsp_enabled) {
+    html += "<div class='row hint'>RTSP is enabled; MJPEG preview is disabled. Use your RTSP client: rtsp://" + WiFi.localIP().toString() + ":" + String(g_rtsp_port) + "/trackID=1</div>";
+  } else {
+    html += "<img class='stream' src='" + streamURL + "' alt='Video stream' title='Live MJPEG stream'>";
+  }
   html += "</div>";
 
   // Status block
   html += "<div class='panel'><h3>Status</h3><pre id='st'>Loading...</pre></div>"
           "<script>"
-          "function applyStatus(j){document.getElementById('st').textContent=JSON.stringify(j,null,2);}"
+          "function applyStatus(j){"
+          "document.getElementById('st').textContent=JSON.stringify(j,null,2);"
+          "if(j && j.rtsp){"
+          "document.getElementById('rtsp').checked=!!j.rtsp.enabled;"
+          "if(j.rtsp.port) document.getElementById('rtsp_port').value=j.rtsp.port;"
+          "}"
+          "}"
+          "function applyRtsp(){"
+          "const en=document.getElementById('rtsp').checked?1:0;"
+          "const port=document.getElementById('rtsp_port').value||8554;"
+          "fetch('/api/rtsp?enable='+en+'&port='+port).then(()=>{document.getElementById('st').textContent='Applying... device may reboot';});"
+          "}"
           "fetch('/api/status').then(r=>r.json()).then(applyStatus);"
           "</script>";
 
@@ -264,17 +296,41 @@ void startCameraServer() {
     framesize_t fs = s ? s->status.framesize : FRAMESIZE_VGA;
     int pan=0, tilt=0; ptzGet(pan, tilt);
 
-    char buf[256];
+    char buf[320];
     snprintf(buf, sizeof(buf),
       "{"
       "\"ip\":\"%s\","
       "\"framesize\":%d,"
-      "\"ptz\":{\"pan\":%d,\"tilt\":%d}"
+      "\"ptz\":{\"pan\":%d,\"tilt\":%d},"
+      "\"rtsp\":{\"enabled\":%d,\"port\":%u}"
       "}",
       WiFi.localIP().toString().c_str(),
       (int)fs,
-      pan, tilt);
+      pan, tilt,
+      g_rtsp_enabled ? 1 : 0,
+      (unsigned)g_rtsp_port);
     req->send(200, "application/json", buf);
+  });
+
+  // Toggle RTSP vs MJPEG; applies then restarts to ensure single streamer
+  srv.on("/api/rtsp", HTTP_GET, [](AsyncWebServerRequest* req){
+    if (!isAuthorized(req)) { send401(req); return; }
+    bool en = g_rtsp_enabled;
+    uint16_t port = g_rtsp_port;
+    if (req->hasParam("enable")) {
+      en = req->getParam("enable")->value().toInt() ? true : false;
+    }
+    if (req->hasParam("port")) {
+      int p = req->getParam("port")->value().toInt();
+      if (p >= 1024 && p <= 65535) port = (uint16_t)p;
+    }
+    Preferences prefs; prefs.begin(CAM_NS, false);
+    prefs.putBool(KEY_RTSP_ENABLE, en);
+    prefs.putUShort(KEY_RTSP_PORT, port);
+    prefs.end();
+    req->send(200, "application/json", "{\"ok\":1,\"msg\":\"Applying streaming mode and rebooting\"}");
+    delay(200);
+    ESP.restart();
   });
 
   // Heap/PSRAM snapshot

@@ -243,7 +243,18 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _open_discovery(self) -> None:
         dlg = DiscoveryDialog(self.app_cfg, self)
-        dlg.exec()
+        if dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+            cam_info = dlg.selected_camera()
+            if cam_info:
+                cam_cfg = CameraSettings(
+                    name=cam_info.get("name"),
+                    stream_url=cam_info.get("stream_url"),
+                    user=cam_info.get("user"),
+                    password=cam_info.get("password"),
+                )
+                self.app_cfg.cameras.append(cam_cfg)
+                self._add_camera_window(cam_cfg)
+                save_settings(self.app_cfg)
 
     def _open_mqtt_settings(self) -> None:
         dlg = MqttSettingsDialog(self.app_cfg, self)
@@ -269,11 +280,75 @@ class MainWindow(QtWidgets.QMainWindow):
                 self, "Remove Camera", f"No camera named '{name}' found."
             )
             return
+        # Stop and close the camera window if it is open
+        for sub in list(self.mdi.subWindowList()):
+            if sub.windowTitle() == name:
+                w = sub.widget()
+                if isinstance(w, CameraWidget):
+                    try:
+                        w.stop()
+                    except Exception:
+                        pass
+                sub.close()
+        # Remove any stored geometry for this camera
+        geo = self.app_cfg.window_geometries or {}
+        if name in geo:
+            try:
+                del geo[name]
+                self.app_cfg.window_geometries = geo
+            except Exception:
+                pass
+        # Persist updated camera list
         self.app_cfg.cameras = cams
         save_settings(self.app_cfg)
         QtWidgets.QMessageBox.information(
-            self, "Remove Camera", f"Removed camera '{name}'. Restart to take effect."
+            self, "Remove Camera", f"Removed camera '{name}'."
         )
+
+    def _rename_camera_dialog(self) -> None:
+        names = [getattr(c, "name", "") for c in self.app_cfg.cameras]
+        if not names:
+            QtWidgets.QMessageBox.information(self, "Rename Camera", "No cameras configured.")
+            return
+        old, ok = QtWidgets.QInputDialog.getItem(
+            self,
+            "Rename Camera",
+            "Select camera to rename:",
+            names,
+            editable=False,
+        )
+        if not ok or not old:
+            return
+        new, ok = QtWidgets.QInputDialog.getText(
+            self,
+            "Rename Camera",
+            f"Enter new name for '{old}':",
+        )
+        if not ok:
+            return
+        new = new.strip()
+        if not new:
+            QtWidgets.QMessageBox.warning(self, "Rename Camera", "Name cannot be empty.")
+            return
+        # Ensure unique
+        if any(getattr(c, "name", "") == new for c in self.app_cfg.cameras):
+            QtWidgets.QMessageBox.warning(self, "Rename Camera", "A camera with that name already exists.")
+            return
+        # Update config and any open window
+        for c in self.app_cfg.cameras:
+            if getattr(c, "name", "") == old:
+                c.name = new
+        for sub in list(self.mdi.subWindowList()):
+            if sub.windowTitle() == old:
+                sub.setWindowTitle(new)
+                w = sub.widget()
+                if hasattr(w, "cam_cfg"):
+                    try:
+                        w.cam_cfg.name = new
+                    except Exception:
+                        pass
+        save_settings(self.app_cfg)
+        QtWidgets.QMessageBox.information(self, "Rename Camera", f"Renamed '{old}' to '{new}'.")
 
     def _open_unknown_capture_dialog(self) -> None:
         dlg = UnknownCaptureDialog(self.app_cfg, self)
@@ -318,6 +393,9 @@ class MainWindow(QtWidgets.QMainWindow):
         m_cams.addAction("Remove Camera…").triggered.connect(
             self._remove_camera_dialog
         )
+        m_cams.addAction("Rename Camera…").triggered.connect(
+            self._rename_camera_dialog
+        )
         m_cams.addSeparator()
         m_cams.addAction("Discover ESP32-CAMs…").triggered.connect(
             self._open_discovery
@@ -331,6 +409,9 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         m_tools.addAction("Open logs folder").triggered.connect(
             lambda: open_folder_or_warn(self, self.app_cfg.logs_dir)
+        )
+        m_tools.addAction("Purge auto-trained unknowns").triggered.connect(
+            self._purge_auto_unknowns
         )
         m_tools.addSeparator()
         m_tools.addAction("MQTT Settings").triggered.connect(
@@ -615,3 +696,23 @@ class MainWindow(QtWidgets.QMainWindow):
             f"Restored to:\n{dest}\n\nRebuilding face model...",
         )
         self._start_face_rebuild(f"Rebuilding face model with {target_name}")
+
+    def _purge_auto_unknowns(self) -> None:
+        """
+        Remove auto-trained unknowns (auto_person_*/auto_pet_*) and rebuild LBPH.
+        """
+        face_root = BASE_DIR / "data" / "faces"
+        removed = []
+        for child in face_root.iterdir():
+            if not child.is_dir():
+                continue
+            name = child.name
+            if name.startswith("auto_person_") or name.startswith("auto_pet_"):
+                try:
+                    shutil.rmtree(child)
+                    removed.append(name)
+                except Exception:
+                    continue
+        msg = "No auto-trained folders found." if not removed else f"Removed: {', '.join(removed)}"
+        QtWidgets.QMessageBox.information(self, "Purge auto-trained unknowns", f"{msg}\nRebuilding face model...")
+        self._start_face_rebuild("Rebuilding face model without auto-trained unknowns")

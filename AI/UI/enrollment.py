@@ -44,6 +44,12 @@ class EnrollDialog(QtWidgets.QDialog):
         self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
 
+        self.progress = QtWidgets.QProgressBar(self)
+        self.progress.setMinimum(0)
+        self.progress.setMaximum(100)
+        self.progress.setValue(0)
+        layout.addWidget(self.progress)
+
         btn_row = QtWidgets.QHBoxLayout()
         self.btn_start = QtWidgets.QPushButton("Start", self)
         self.btn_stop = QtWidgets.QPushButton("Abort", self)
@@ -98,7 +104,16 @@ class EnrollDialog(QtWidgets.QDialog):
             self.status_label.setText(f"Error: {err}")
         else:
             self.status_label.setText(f"Enrolling '{name}' - existing {existing}, this session {got}/{need}")
+        if need > 0:
+            pct = int((got / max(1, need)) * 100)
+            self.progress.setValue(min(max(pct, 0), 100))
+        else:
+            self.progress.setValue(0)
         if done:
             self.btn_start.setEnabled(True)
             self.btn_stop.setEnabled(False)
             self.status_label.setText(f"Done {got}/{need}. Training saved models to models/lbphfaces.xml")
+            self.progress.setValue(100)
+        elif not active:
+            self.btn_start.setEnabled(True)
+            self.btn_stop.setEnabled(False)

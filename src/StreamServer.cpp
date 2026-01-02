@@ -193,3 +193,10 @@ void startStreamServer() {
     httpd_register_uri_handler(stream_httpd, &snap_uri);
   }
 }
+
+void stopStreamServer() {
+  if (stream_httpd) {
+    httpd_stop(stream_httpd);
+    stream_httpd = NULL;
+  }
+}

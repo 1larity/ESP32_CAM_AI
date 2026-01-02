@@ -1,6 +1,0 @@
-Faces base: ai/data/faces
-Persons: 1  Total images: 137
-
-
-[richard] samples: 137
-  preview: 1756388823179.jpg, 1756388833707.jpg, 1756388893585.jpg, 1756392607987.jpg, 1756392648211.jpg

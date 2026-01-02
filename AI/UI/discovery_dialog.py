@@ -36,7 +36,7 @@ def _default_subnet() -> str:
 
 class DiscoveryDialog(QtWidgets.QDialog):
     progress = QtCore.Signal(int, int, str)   # idx, total, ip
-    addItemSignal = QtCore.Signal(str)        # label
+    addItemSignal = QtCore.Signal(object)        # result dict
     scanFinished = QtCore.Signal()            # scan finished
 
     def __init__(self, app_cfg, parent: QtWidgets.QWidget | None = None) -> None:
@@ -58,8 +58,12 @@ class DiscoveryDialog(QtWidgets.QDialog):
         self.btn_scan = QtWidgets.QPushButton("Scan")
         self.btn_stop = QtWidgets.QPushButton("Stop")
         self.btn_stop.setEnabled(False)
+        self.btn_add = QtWidgets.QPushButton("Add Selected")
+        self.btn_add.setEnabled(False)
 
         self.list = QtWidgets.QListWidget()
+        self.list.itemSelectionChanged.connect(self._on_selection)
+        self.list.itemDoubleClicked.connect(self._on_add_selected)
 
         self.lbl_help = QtWidgets.QLabel(
             "Checks only /api/status on port 80.\n"
@@ -88,6 +92,7 @@ class DiscoveryDialog(QtWidgets.QDialog):
         btns = QtWidgets.QHBoxLayout()
         btns.addWidget(self.btn_scan)
         btns.addWidget(self.btn_stop)
+        btns.addWidget(self.btn_add)
 
         lay = QtWidgets.QVBoxLayout(self)
         lay.addLayout(form)
@@ -99,9 +104,11 @@ class DiscoveryDialog(QtWidgets.QDialog):
 
         self._stop = threading.Event()
         self._scanner: RangeScanner | None = None
+        self._selected_cam = None
 
         self.btn_scan.clicked.connect(self._start)
         self.btn_stop.clicked.connect(self._cancel)
+        self.btn_add.clicked.connect(self._on_add_selected)
 
         self.progress.connect(self._on_progress)
         self.addItemSignal.connect(self._add_item)
@@ -158,7 +165,14 @@ class DiscoveryDialog(QtWidgets.QDialog):
                 label = f"{res.ip}:{res.port}  {res.name}  ({res.path})  [{extra}]"
             else:
                 label = f"{res.ip}:{res.port}  {res.path}  [{extra}]"
-            self.addItemSignal.emit(label)
+            self.addItemSignal.emit({
+                "label": label,
+                "ip": res.ip,
+                "port": res.port,
+                "name": res.name,
+                "path": res.path,
+                "auth": res.auth_required,
+            })
 
         self._scanner.scan_range(subnet, a, b, on_progress=on_progress, on_result=on_result)
         self.scanFinished.emit()
@@ -181,6 +195,50 @@ class DiscoveryDialog(QtWidgets.QDialog):
             self.pb.setMaximum(0)
             self.lbl_progress.setText(f"Scanning {ip}")
 
-    @QtCore.Slot(str)
-    def _add_item(self, label: str) -> None:
-        self.list.addItem(label)
+    @QtCore.Slot(object)
+    def _add_item(self, res: object) -> None:
+        if not isinstance(res, dict):
+            return
+        label = res.get("label", "")
+        item = QtWidgets.QListWidgetItem(label)
+        item.setData(QtCore.Qt.ItemDataRole.UserRole, res)
+        self.list.addItem(item)
+
+    def _on_selection(self) -> None:
+        self.btn_add.setEnabled(len(self.list.selectedItems()) > 0)
+
+    def _on_add_selected(self) -> None:
+        sel = self.list.selectedItems()
+        if not sel:
+            return
+        data = sel[0].data(QtCore.Qt.ItemDataRole.UserRole) or {}
+        ip = data.get("ip")
+        port = data.get("port", 80)
+        if not ip:
+            return
+        # Default stream URL: MJPEG on port 81
+        stream_url = f"http://{ip}:81/stream"
+        cam_name = data.get("name") or f"Discovered-{ip}"
+        cam_user = None
+        cam_pass = None
+        if data.get("auth"):
+            user, ok = QtWidgets.QInputDialog.getText(self, "Camera credentials", "Username:", QtWidgets.QLineEdit.EchoMode.Normal)
+            if not ok:
+                return
+            pwd, ok = QtWidgets.QInputDialog.getText(self, "Camera credentials", "Password:", QtWidgets.QLineEdit.EchoMode.Password)
+            if not ok:
+                return
+            cam_user = user.strip() or None
+            cam_pass = pwd
+        self._selected_cam = {
+            "name": cam_name,
+            "stream_url": stream_url,
+            "status_ip": ip,
+            "status_port": port,
+            "user": cam_user,
+            "password": cam_pass,
+        }
+        self.accept()
+
+    def selected_camera(self):
+        return self._selected_cam
