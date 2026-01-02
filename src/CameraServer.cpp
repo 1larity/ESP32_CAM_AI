@@ -8,6 +8,8 @@
 #include <Preferences.h>
 #include "StreamServer.h"
 #include "PTZ.h"
+#include "esp_system.h"
+#include "esp_heap_caps.h"
 
 // ===== Resolution options with actual pixel sizes =====
 struct ResolutionOption {
@@ -23,8 +25,6 @@ static const char* KEY_FLASH = "flash";
 static const char* KEY_FLASH_LEVEL = "flash_level";
 
 static const ResolutionOption resolutionOptions[] = {
-  {FRAMESIZE_UXGA,  "UXGA",   1600,1200},
-  {FRAMESIZE_SXGA,  "SXGA",   1280,1024},
   {FRAMESIZE_XGA,   "XGA",    1024,768},
   {FRAMESIZE_SVGA,  "SVGA",   800, 600},
   {FRAMESIZE_VGA,   "VGA",    640, 480},
@@ -181,14 +181,14 @@ static void renderCameraPage(AsyncWebServerRequest* request) {
   html += "</head><body><div class='wrap'>";
 
   html += "<div class='nav'>"
-          "<a class='btn' href='/wifi'>Wi-Fi Settings</a>"
-          "<a class='btn' href='/ptz/home'>PTZ Home</a>"
+          "<a class='btn' href='/wifi' title='Configure Wi-Fi and access settings'>Wi-Fi Settings</a>"
+          "<a class='btn' href='/about' title='About this firmware'>About</a>"
           "</div>";
 
   // Controls
   html += "<div class='panel'><h3>Camera Controls</h3>";
   html += "<div class='row'><label for='res'>Resolution</label>"
-          "<select id='res' onchange=\"fetch('/resolution?set='+this.value).then(()=>location.reload())\">";
+          "<select id='res' title='Set camera resolution' onchange=\"fetch('/resolution?set='+this.value).then(()=>location.reload())\">";
   for (auto& o : resolutionOptions) {
     bool sel = (s && o.size == cur);
     html += String("<option value='") + o.name + "'" + (sel ? " selected" : "") + ">"
@@ -198,10 +198,10 @@ static void renderCameraPage(AsyncWebServerRequest* request) {
 
   // PTZ buttons call /ptz/step
   html += "<div class='row'>"
-          "<button class='btn' onclick=\"fetch('/ptz/step?dy=10')\">Up</button> "
-          "<button class='btn' onclick=\"fetch('/ptz/step?dy=-10')\">Down</button> "
-          "<button class='btn' onclick=\"fetch('/ptz/step?dx=-10')\">Left</button> "
-          "<button class='btn' onclick=\"fetch('/ptz/step?dx=10')\">Right</button>"
+          "<button class='btn' title='Nudge camera up' onclick=\"fetch('/ptz/step?dy=10')\">Up</button> "
+          "<button class='btn' title='Nudge camera down' onclick=\"fetch('/ptz/step?dy=-10')\">Down</button> "
+          "<button class='btn' title='Nudge camera left' onclick=\"fetch('/ptz/step?dx=-10')\">Left</button> "
+          "<button class='btn' title='Nudge camera right' onclick=\"fetch('/ptz/step?dx=10')\">Right</button>"
           "</div>";
   html += "</div>";
 
@@ -212,7 +212,7 @@ static void renderCameraPage(AsyncWebServerRequest* request) {
     String tok = getAuthTokenParam();
     if (tok.length() > 0) streamURL += "?token=" + tok;
   }
-  html += "<img class='stream' src='" + streamURL + "' alt='Video stream'>";
+  html += "<img class='stream' src='" + streamURL + "' alt='Video stream' title='Live MJPEG stream'>";
   html += "</div>";
 
   // Status block
@@ -274,6 +274,28 @@ void startCameraServer() {
       WiFi.localIP().toString().c_str(),
       (int)fs,
       pan, tilt);
+    req->send(200, "application/json", buf);
+  });
+
+  // Heap/PSRAM snapshot
+  srv.on("/api/mem", HTTP_GET, [](AsyncWebServerRequest* req){
+    if (!isAuthorized(req)) { send401(req); return; }
+    size_t free_heap = heap_caps_get_free_size(MALLOC_CAP_DEFAULT);
+    size_t min_heap  = heap_caps_get_minimum_free_size(MALLOC_CAP_DEFAULT);
+    size_t free_ps   = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    size_t min_ps    = heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM);
+    char buf[192];
+    snprintf(buf, sizeof(buf),
+      "{"
+      "\"free_heap\":%u,"
+      "\"min_heap\":%u,"
+      "\"free_psram\":%u,"
+      "\"min_psram\":%u"
+      "}",
+      (unsigned)free_heap,
+      (unsigned)min_heap,
+      (unsigned)free_ps,
+      (unsigned)min_ps);
     req->send(200, "application/json", buf);
   });
 }

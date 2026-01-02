@@ -9,21 +9,21 @@
   "yolo_url": null,
   "haar_url": null,
   "face_model": "C:\\Users\\stellaris\\Documents\\PlatformIO\\Projects\\ESP32_CAM_AI\\AI\\models\\face_yunet.onnx",
-  "window_geometry": "01d9d0cb00030000000000cf000000490000087500000427000000cf00000068000008750000042700000000000000000a00000000cf000000680000087500000427",
+  "window_geometry": "01d9d0cb00030000fffff78d0000000cffffff33000003eafffff78d0000002bffffff33000003ea00000001000000000a00fffff78d0000002bffffff33000003ea",
   "window_state": "000000ff00000000fd00000001000000010000011b000003aafc0200000001fb00000014006500760065006e007400730044006f0063006b0100000016000003aa0000009100ffffff00000688000003aa00000004000000040000000800000008fc00000000",
   "window_geometries": {
     "cam1": [
-      41,
-      83,
-      872,
-      746,
+      837,
+      0,
+      816,
+      669,
       0
     ],
     "Cam-2": [
-      1044,
-      167,
-      825,
-      746,
+      0,
+      0,
+      816,
+      669,
       0
     ]
   },
@@ -49,7 +49,7 @@
   "mqtt_base_topic": "esp32_cam_ai",
   "mqtt_discovery_prefix": "homeassistant",
   "mqtt_user": "homeassistant",
-  "mqtt_password_enc": "l8Xw9CGBdKzQm9Vc9e2plAC6i78/ew3giQ8JyjjkVbpH+e2dwkAkHfQ4O9RVNLGg2GL6bf4=",
+  "mqtt_password_enc": "7oi0Ug5isNFkoxK4ORbtuPOmtpzAifckJxa6b/iXoLS+tkmsxI9cePQbF9dMvi0aKCcoLXc=",
   "cameras": [
     {
       "name": "cam1",
@@ -69,7 +69,7 @@
       "rotation_deg": 0,
       "flip_horizontal": false,
       "flip_vertical": false,
-      "password_enc": "aVXfYbkjUp2WWB6VFjWDJHVTwGYxGeM7Jr5uOgaSULAGHsW6ydTuTMM6txnnqHvmIUQT/fc="
+      "password_enc": "dBo1Pj7GtlI4pN7FriuU/p9K0VC/reoeTago57jwpJDsmrzUlfyF5oHJ+3Dr353krSW412g="
     },
     {
       "name": "Cam-2",
@@ -89,7 +89,7 @@
       "rotation_deg": 0,
       "flip_horizontal": false,
       "flip_vertical": false,
-      "password_enc": "E1b9OYiooHF6pwqOYZqD9tfaaES/NyX2+AC+j5KTNt7SvPXvtPp3k507bGAQs8BTTe3G6yg="
+      "password_enc": "H+uJ64fjdOFbADzlpM8VBy54c4w/s3LOzza0jCzi2uIxSdAd2ciGGra6TaBd4t7/K0XJdRA="
     }
   ]
 }
