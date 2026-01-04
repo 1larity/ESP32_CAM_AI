@@ -77,23 +77,6 @@ class CameraSettingsDialog(QtWidgets.QDialog):
             stream_row.addWidget(btn_custom)
             layout.addRow("Stream:", stream_row)
 
-        # LED / flash controls
-        self.cb_flash = QtWidgets.QComboBox()
-        self.cb_flash.addItems(["Off", "On", "Auto"])
-        mode_idx = {"off": 0, "on": 1, "auto": 2}.get(
-            getattr(widget, "_flash_mode", "off").lower(), 0
-        )
-        self.cb_flash.setCurrentIndex(mode_idx)
-
-        self.s_flash = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
-        self.s_flash.setRange(0, 255)
-        self.s_flash.setSingleStep(4)
-        self.s_flash.setValue(int(getattr(widget, "_flash_level", 128)))
-        self.s_flash.setTickInterval(8)
-        self.s_flash.setTickPosition(QtWidgets.QSlider.TickPosition.TicksBelow)
-        layout.addRow("LED mode:", self.cb_flash)
-        layout.addRow("LED level:", self._wrap_slider(self.s_flash, width=60))
-
         # AI controls
         self.cb_ai_enabled = QtWidgets.QCheckBox("Enable AI")
         self.cb_ai_enabled.setChecked(bool(getattr(widget, "_ai_enabled", True)))
@@ -180,22 +163,6 @@ class CameraSettingsDialog(QtWidgets.QDialog):
         # Motion
         self.cam_cfg.record_motion = self.cb_motion.isChecked()
         self.cam_cfg.motion_sensitivity = int(self.s_motion.value())
-
-        # LED / flash
-        mode_text = self.cb_flash.currentText()
-        level = int(self.s_flash.value())
-        self.widget._flash_level = level
-        self.widget.cam_cfg.flash_level = level
-        self.widget._flash_mode = mode_text.lower()
-        self.widget.cam_cfg.flash_mode = mode_text.lower()
-        # sync hidden controls so internal helpers work
-        self.widget.cb_flash.blockSignals(True)
-        self.widget.cb_flash.setCurrentText(mode_text)
-        self.widget.cb_flash.blockSignals(False)
-        self.widget.s_flash.blockSignals(True)
-        self.widget.s_flash.setValue(level)
-        self.widget.s_flash.blockSignals(False)
-        self.widget._apply_flash_mode(initial=False)
 
         # AI
         ai_enabled = self.cb_ai_enabled.isChecked()

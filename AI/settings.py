@@ -28,10 +28,6 @@ class CameraSettings:
     token: Optional[str] = None
     alt_streams: list[str] = field(default_factory=list)  # optional alternates (e.g., substreams /102)
     view_scale: float = 1.0           # persisted zoom level
-    flash_mode: str = "off"         # off | on | auto
-    flash_level: int = 128          # 0-255
-    flash_auto_target: int = 80     # desired brightness (0-255)
-    flash_auto_hyst: int = 15       # hysteresis band (0-255)
     # Per-camera recording overrides (fallback to app defaults if None)
     record_motion: Optional[bool] = None
     motion_sensitivity: Optional[int] = None
@@ -122,10 +118,7 @@ def load_settings() -> AppSettings:
                     token=c.get("token"),
                     alt_streams=c.get("alt_streams", []) or [],
                     view_scale=float(c.get("view_scale", 1.0) or 1.0),
-                    flash_mode=c.get("flash_mode", "off"),
-                    flash_level=max(0, min(255, int(c.get("flash_level", 128)))),
-                    flash_auto_target=int(c.get("flash_auto_target", 80)),
-                    flash_auto_hyst=int(c.get("flash_auto_hyst", 15)),
+                    # flash fields removed
                     record_motion=c.get("record_motion", raw.get("record_motion")),
                     motion_sensitivity=c.get("motion_sensitivity", raw.get("motion_sensitivity")),
                     ai_enabled=c.get("ai_enabled"),

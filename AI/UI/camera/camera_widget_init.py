@@ -106,18 +106,6 @@ def init_camera_widget(self) -> None:
 
     self.btn_ai_menu.setMenu(self.menu_ai)
 
-    # Flash controls (moved into Cam Settings dialog; keep widgets for logic)
-    self.cb_flash = QtWidgets.QComboBox()
-    self.cb_flash.addItems(["Off", "On", "Auto"])
-    self.cb_flash.setVisible(False)
-    self.s_flash = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
-    self.s_flash.setRange(0, 255)
-    self.s_flash.setSingleStep(4)
-    self.s_flash.setFixedWidth(120)
-    self.s_flash.setVisible(False)
-    self.lbl_flash = QtWidgets.QLabel("0")
-    self.lbl_flash.setVisible(False)
-
     # Assemble toolbar (same order as before, but with View menu)
     tb.addWidget(self.btn_rec)
     tb.addWidget(self.btn_snap)
@@ -158,15 +146,6 @@ def init_camera_widget(self) -> None:
     self._overlay_ttl_ms = 750  # matches previous CameraWidget
     # Enrollment service singleton
     self._enrollment = EnrollmentService.instance()
-    # Flash state
-    self._flash_mode = getattr(self.cam_cfg, "flash_mode", "off") or "off"
-    self._flash_level = min(255, max(0, int(getattr(self.cam_cfg, "flash_level", 128) or 128)))
-    self._flash_auto_target = int(getattr(self.cam_cfg, "flash_auto_target", 80) or 80)
-    self._flash_auto_hyst = int(getattr(self.cam_cfg, "flash_auto_hyst", 15) or 15)
-    self._flash_next_auto_ms = 0
-    # Sync with camera-reported flash state to avoid overriding hardware on startup.
-    self._sync_flash_from_camera()
-
     # Prebuffer recorder: per-camera
     self._recorder = PrebufferRecorder(
         cam_name=self.cam_cfg.name,
@@ -232,8 +211,6 @@ def init_camera_widget(self) -> None:
     # Recording / snapshot
     self.btn_rec.clicked.connect(self._toggle_recording)
     self.btn_snap.clicked.connect(self._snapshot)
-    self.cb_flash.currentTextChanged.connect(self._on_flash_mode_changed)
-    self.s_flash.valueChanged.connect(self._on_flash_level_changed)
     self.btn_cam_settings.clicked.connect(self._open_camera_settings)
 
     # View menu actions -> view helpers (provided by camera_widget_view.py)
@@ -275,13 +252,4 @@ def init_camera_widget(self) -> None:
     self._overlays.hud = True
     self._overlays.stats = True
 
-    # Initialize flash controls/state
-    self.s_flash.blockSignals(True)
-    self.cb_flash.blockSignals(True)
-    self.s_flash.setValue(self._flash_level)
-    self.lbl_flash.setText(str(self._flash_level))
-    mode_idx = {"off": 0, "on": 1, "auto": 2}.get(self._flash_mode.lower(), 0)
-    self.cb_flash.setCurrentIndex(mode_idx)
-    self.cb_flash.blockSignals(False)
-    self.s_flash.blockSignals(False)
-    self._apply_flash_mode(initial=True)
+    # No flash controls (LED disabled)

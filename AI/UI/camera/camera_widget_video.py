@@ -5,8 +5,6 @@ from __future__ import annotations
 import time
 from typing import Optional, Tuple
 from urllib.parse import urlparse
-import requests
-import numpy as np
 import cv2
 from PySide6 import QtCore, QtGui, QtWidgets
 from PySide6.QtCore import Slot
@@ -14,9 +12,8 @@ from detectors import DetectionPacket
 from enrollment import EnrollmentService
 from settings import save_settings
 from stream import StreamCapture
-from utils import qimage_from_bgr, debug, monotonic_ms
-from ..overlays import draw_overlays
-from ..overlay_stats import FpsCounter, compute_yolo_stats, YoloStats
+from utils import debug, monotonic_ms
+from .camera_widget_overlay_layer import attach_overlay_layer
 
 
 def attach_video_handlers(cls) -> None:
@@ -36,114 +33,8 @@ def attach_video_handlers(cls) -> None:
         sensitivity = max(0, min(100, sensitivity))
         return record_motion, sensitivity
 
-    # ----------------------------
-    # Overlay caching helpers
-    # ----------------------------
-
-    def _overlay_toggles_key(self) -> Tuple[bool, bool, bool, bool, bool, bool]:
-        ov = self._overlays
-        return (
-            bool(getattr(ov, "hud", False)),
-            bool(getattr(ov, "yolo", False)),
-            bool(getattr(ov, "faces", False)),
-            bool(getattr(ov, "pets", False)),
-            bool(getattr(ov, "tracks", False)),
-            bool(getattr(ov, "stats", False)),
-        )
-
-    def _ensure_overlay_cache(self, w: int, h: int) -> None:
-        # Lazy init cache fields
-        if not hasattr(self, "_overlay_cache_pixmap"):
-            self._overlay_cache_pixmap = None
-            self._overlay_cache_key = None
-            self._overlay_cache_dirty = True
-            self._hud_cache_next_ms = 0
-            self._stats_cache_next_ms = 0
-
-        if (
-            self._overlay_cache_pixmap is None
-            or self._overlay_cache_pixmap.size() != QtCore.QSize(w, h)
-        ):
-            self._overlay_cache_pixmap = QtGui.QPixmap(w, h)
-            self._overlay_cache_pixmap.fill(QtCore.Qt.GlobalColor.transparent)
-            self._overlay_cache_dirty = True
-            self._overlay_cache_key = None
-            self._overlay_scale = self._overlay_scale_factor(w, h)
-        else:
-            self._overlay_scale = self._overlay_scale_factor(w, h)
-
-    def _overlay_scale_factor(self, w: int, h: int) -> float:
-        """
-        Scale overlays relative to video resolution so text remains readable
-        even when high-res streams are downscaled in the view.
-        """
-        base = max(1, min(w, h))
-        scale = base / 480.0
-        return max(1.0, min(3.0, scale))
-
-    def _render_overlay_cache(
-        self, pkt: Optional[DetectionPacket], w: int, h: int, now_ms: int
-    ) -> None:
-        """
-        Render overlays into a transparent pixmap layer.
-
-        Design:
-          - Base video is rendered every frame (QPixmap from QImage)
-          - Overlays are cached and only redrawn when "something changes"
-        """
-        self._overlay_cache_pixmap.fill(QtCore.Qt.GlobalColor.transparent)
-        scale = self._overlay_scale_factor(w, h)
-        self._overlay_scale = scale
-
-        painter = QtGui.QPainter(self._overlay_cache_pixmap)
-        try:
-            # Detection overlays (cached)
-            if pkt is not None and getattr(self, "_ai_enabled", False):
-                detections_enabled = (
-                    getattr(self._overlays, "yolo", False)
-                    or getattr(self._overlays, "faces", False)
-                    or getattr(self._overlays, "pets", False)
-                    or getattr(self._overlays, "tracks", False)
-                )
-                if detections_enabled:
-                    # overlays.py may draw HUD; we handle HUD here
-                    orig_hud = getattr(self._overlays, "hud", False)
-                    self._overlays.hud = False
-                    draw_overlays(painter, pkt, self._overlays)
-                    self._overlays.hud = orig_hud
-
-            # HUD overlay (cached, updated on cadence by cache invalidation logic)
-            if getattr(self._overlays, "hud", False):
-                self._draw_hud(painter)
-
-            # Stats overlay (cached, but cadence-limited by cache invalidation logic)
-            if getattr(self._overlays, "stats", False) and getattr(self, "_ai_enabled", False):
-                if not hasattr(self, "_fps_counter"):
-                    self._fps_counter = FpsCounter()
-
-                fps = self._fps_counter.update()
-
-                boxes = []
-                if pkt is not None:
-                    boxes.extend(getattr(pkt, "faces", []) or [])
-                    boxes.extend(getattr(pkt, "pets", []) or [])
-                stats = compute_yolo_stats(boxes)
-
-                self._draw_stats_line(painter, fps, stats, w, h)
-
-            # Recording indicator overlay (placed on video, not toolbar)
-            if getattr(self, "_rec_indicator_on", False):
-                self._draw_rec_indicator(painter, w, h)
-
-        finally:
-            painter.end()
-
-    def _invalidate_overlay_cache(self) -> None:
-        """Call this whenever overlay toggles / AI toggles / visual settings change."""
-        if not hasattr(self, "_overlay_cache_dirty"):
-            self._overlay_cache_dirty = True
-        else:
-            self._overlay_cache_dirty = True
+    # Attach overlay helpers from dedicated module
+    attach_overlay_layer(cls)
 
     # ----------------------------
     # Frame loop + compositing
@@ -156,10 +47,6 @@ def attach_video_handlers(cls) -> None:
 
         frame = self._apply_orientation(frame)
         self._last_bgr = frame
-
-        # Auto-flash adjustment (throttled) based on scene brightness.
-        if getattr(self, "_flash_mode", "off").lower() == "auto":
-            self._flash_auto_adjust(frame, ts_ms)
 
         # Frame profiling (throttled) to spot stalls without spamming logs.
         if not hasattr(self, "_frame_stats"):
@@ -199,61 +86,6 @@ def attach_video_handlers(cls) -> None:
 
         self._update_pixmap(frame, pkt_for_frame)
 
-    def _update_pixmap(self, bgr, pkt: Optional[DetectionPacket]) -> None:
-        """
-        Render base video every frame, overlay layer only when needed,
-        then composite base + overlay layer.
-        """
-        qimg = qimage_from_bgr(bgr)
-        base = QtGui.QPixmap.fromImage(qimg)
-
-        w = base.width()
-        h = base.height()
-        now_ms = int(time.time() * 1000)
-
-        self._ensure_overlay_cache(w, h)
-
-        toggles_key = self._overlay_toggles_key()
-
-        # Detection identity key (must change when overlay content changes)
-        pkt_key = None
-        if pkt is not None:
-            pkt_key = (getattr(pkt, "ts_ms", None), getattr(pkt, "seq", None))
-
-        # HUD changes on second boundary (only matters if HUD enabled)
-        hud_sec = int(time.time()) if getattr(self._overlays, "hud", False) else None
-
-        # **CHANGED** throttle stats overlay updates (otherwise caching gives little benefit)
-        stats_tick = None
-        if getattr(self._overlays, "stats", False) and getattr(self, "_ai_enabled", False):
-            if now_ms >= getattr(self, "_stats_cache_next_ms", 0):
-                self._stats_cache_next_ms = now_ms + 125  # ~8 Hz
-                self._overlay_cache_dirty = True
-            stats_tick = self._stats_cache_next_ms
-
-        # **CHANGED** redraw HUD only once per second
-        if getattr(self._overlays, "hud", False):
-            if now_ms >= getattr(self, "_hud_cache_next_ms", 0):
-                self._hud_cache_next_ms = (hud_sec + 1) * 1000
-                self._overlay_cache_dirty = True
-
-        cache_key = (w, h, toggles_key, pkt_key, hud_sec, stats_tick)
-
-        if getattr(self, "_overlay_cache_dirty", True) or getattr(self, "_overlay_cache_key", None) != cache_key:
-            self._render_overlay_cache(pkt, w, h, now_ms)
-            self._overlay_cache_key = cache_key
-            self._overlay_cache_dirty = False
-
-        # Composite cached overlays onto base pixmap
-        painter = QtGui.QPainter(base)
-        try:
-            painter.drawPixmap(0, 0, self._overlay_cache_pixmap)
-        finally:
-            painter.end()
-
-        self._pixmap_item.setPixmap(base)
-        self._scene.setSceneRect(QtCore.QRectF(base.rect()))
-
     # ----------------------------
     # Detector callback
     # ----------------------------
@@ -288,65 +120,6 @@ def attach_video_handlers(cls) -> None:
         if self._last_bgr is not None:
             EnrollmentService.instance().on_detections(self.cam_cfg.name, self._last_bgr, pkt)
             self._update_pixmap(self._last_bgr, pkt)
-
-    # ----------------------------
-    # Overlay drawing primitives
-    # ----------------------------
-
-    def _draw_hud(self, p: QtGui.QPainter) -> None:
-        text = f"{self.cam_cfg.name}  {time.strftime('%Y-%m-%d %H:%M:%S')}"
-        scale = float(getattr(self, "_overlay_scale", 1.0) or 1.0)
-        margin = int(6 * scale)
-
-        p.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255)))
-        font = p.font()
-        base_pt = font.pointSize() if font.pointSize() > 0 else 9
-        font.setPointSize(int(max(base_pt, 9 * scale)))
-        p.setFont(font)
-
-        fm = QtGui.QFontMetrics(font)
-        rect = fm.boundingRect(text)
-        rect = QtCore.QRectF(margin, margin, rect.width() + 8 * scale, rect.height() + 4 * scale)
-
-        bg = QtGui.QColor(0, 0, 0, 128)
-        p.fillRect(rect, bg)
-
-        p.drawText(
-            rect.adjusted(4 * scale, 0, -4 * scale, 0),
-            QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter,
-            text,
-        )
-
-    def _draw_stats_line(
-        self, p: QtGui.QPainter, fps: float, stats: YoloStats, width: int, height: int
-    ) -> None:
-        scale = float(getattr(self, "_overlay_scale", 1.0) or 1.0)
-        margin = int(6 * scale)
-        text = (
-            f"FPS: {fps:4.1f} | "
-            f"faces: {stats.faces} ({stats.known_faces} known) | "
-            f"pets: {stats.pets} | total: {stats.total}"
-        )
-
-        font = p.font()
-        base_pt = font.pointSize() if font.pointSize() > 0 else 9
-        font.setPointSize(int(max(base_pt, 9 * scale)))
-        fm = QtGui.QFontMetrics(font)
-        text_width = fm.horizontalAdvance(text)
-        text_height = fm.height()
-
-        x = margin
-        y = height - margin
-        rect = QtCore.QRectF(x - 4 * scale, y - text_height - 2 * scale, text_width + 8 * scale, text_height + 4 * scale)
-
-        bg = QtGui.QColor(0, 0, 0, 128)
-        p.fillRect(rect, bg)
-        p.setPen(QtGui.QColor(255, 255, 255))
-        p.drawText(
-            rect.adjusted(4 * scale, 0, -4 * scale, 0),
-            QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter,
-            text,
-        )
 
     # ----------------------------
     # Actions
@@ -410,153 +183,12 @@ def attach_video_handlers(cls) -> None:
     # Bind injected methods
     # ----------------------------
 
-    cls._overlay_toggles_key = _overlay_toggles_key
-    cls._ensure_overlay_cache = _ensure_overlay_cache
-    cls._overlay_scale_factor = _overlay_scale_factor
-    cls._render_overlay_cache = _render_overlay_cache
-    cls._invalidate_overlay_cache = _invalidate_overlay_cache
-
     cls._poll_frame = _poll_frame
-    cls._update_pixmap = _update_pixmap
     cls._on_detections = _on_detections
     cls._publish_mqtt_state = _publish_mqtt_state
 
-    cls._draw_hud = _draw_hud
-    cls._draw_stats_line = _draw_stats_line
-
     cls._snapshot = _snapshot
     cls._toggle_recording = _toggle_recording
-
-    # ----------------------------
-    # Flash / LED controls
-    # ----------------------------
-
-    def _flash_api_url(self) -> Optional[str]:
-        parsed = urlparse(self.cam_cfg.effective_url())
-        host = parsed.hostname
-        if not host:
-            return None
-        return f"http://{host}:80/api/flash"
-
-    def _send_flash(self, *, level: Optional[int] = None, on: Optional[bool] = None) -> None:
-        url = self._flash_api_url()
-        if not url:
-            return
-        params = {}
-        if level is not None:
-            params["level"] = max(0, min(255, int(level)))
-        if on is not None:
-            params["on"] = 1 if on else 0
-        try:
-            auth = None
-            if self.cam_cfg.user and self.cam_cfg.password:
-                auth = requests.auth.HTTPBasicAuth(self.cam_cfg.user, self.cam_cfg.password)
-            requests.get(url, params=params, auth=auth, timeout=2)
-        except Exception:
-            pass
-
-    def _update_flash_label(self, val: int) -> None:
-        if hasattr(self, "lbl_flash"):
-            self.lbl_flash.setText(str(val))
-
-    def _on_flash_mode_changed(self, text: str) -> None:
-        mode = text.lower()
-        self._flash_mode = mode
-        self.cam_cfg.flash_mode = mode
-        self.s_flash.setEnabled(mode != "off")
-        if mode == "off":
-            self._send_flash(on=False, level=0)
-        elif mode == "on":
-            self._send_flash(level=self._flash_level)
-        elif mode == "auto":
-            # Kick off with current level; auto adjust will take over.
-            self._send_flash(level=self._flash_level)
-            self._flash_next_auto_ms = 0
-
-    def _on_flash_level_changed(self, val: int) -> None:
-        self._flash_level = int(val)
-        self.cam_cfg.flash_level = int(val)
-        self._update_flash_label(self._flash_level)
-        if getattr(self, "_flash_mode", "off").lower() == "on":
-            self._send_flash(level=self._flash_level)
-
-    def _apply_flash_mode(self, initial: bool = False) -> None:
-        # Sync UI and push current state to camera.
-        mode = getattr(self, "_flash_mode", "off").lower()
-        idx_map = {"off": 0, "on": 1, "auto": 2}
-        idx = idx_map.get(mode, 0)
-        if self.cb_flash.currentIndex() != idx:
-            self.cb_flash.blockSignals(True)
-            self.cb_flash.setCurrentIndex(idx)
-            self.cb_flash.blockSignals(False)
-        self.s_flash.setEnabled(mode != "off")
-        self._update_flash_label(self._flash_level)
-        if not initial:
-            # Trigger mode handler to push state
-            self._on_flash_mode_changed(self.cb_flash.currentText())
-
-    def _flash_auto_adjust(self, frame, ts_ms: int) -> None:
-        # Throttle adjustments
-        if ts_ms < getattr(self, "_flash_next_auto_ms", 0):
-            return
-        self._flash_next_auto_ms = ts_ms + 800
-
-        gray_mean = float(np.mean(frame))
-        target = getattr(self, "_flash_auto_target", 80)
-        hyst = getattr(self, "_flash_auto_hyst", 15)
-        level = self._flash_level
-
-        # Hysteresis band
-        if gray_mean < target - hyst:
-            new_level = min(255, level + 16)
-        elif gray_mean > target + hyst:
-            new_level = max(0, level - 16)
-        else:
-            return
-
-        if new_level == level:
-            return
-
-        self._flash_level = new_level
-        self.cam_cfg.flash_level = new_level
-        # Update slider silently
-        self.s_flash.blockSignals(True)
-        self.s_flash.setValue(new_level)
-        self.s_flash.blockSignals(False)
-        self._update_flash_label(new_level)
-        self._send_flash(level=new_level)
-
-    cls._flash_api_url = _flash_api_url
-    cls._send_flash = _send_flash
-    cls._update_flash_label = _update_flash_label
-    cls._on_flash_mode_changed = _on_flash_mode_changed
-    cls._on_flash_level_changed = _on_flash_level_changed
-    cls._flash_auto_adjust = _flash_auto_adjust
-    cls._apply_flash_mode = _apply_flash_mode
-
-    def _draw_rec_indicator(self, p: QtGui.QPainter, w: int, h: int) -> None:
-        margin = 10
-        box_w, box_h = 76, 26
-        rect = QtCore.QRectF(w - box_w - margin, margin, box_w, box_h)
-        bg = QtGui.QColor(180, 0, 0, 180)
-        p.fillRect(rect, bg)
-
-        dot_r = 6
-        dot_center = QtCore.QPointF(rect.left() + 12, rect.center().y())
-        p.setBrush(QtGui.QBrush(QtGui.QColor(255, 80, 80)))
-        p.setPen(QtCore.Qt.PenStyle.NoPen)
-        p.drawEllipse(dot_center, dot_r, dot_r)
-
-        p.setPen(QtGui.QPen(QtGui.QColor(255, 230, 230)))
-        font = p.font()
-        font.setPointSize(max(font.pointSize(), 9))
-        font.setBold(True)
-        p.setFont(font)
-        p.drawText(
-            rect.adjusted(24, 0, -6, 0),
-            QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter,
-            "REC",
-        )
 
     def _update_rec_indicator(self, recording: bool) -> None:
         self._rec_indicator_on = bool(recording)
@@ -772,6 +404,9 @@ def attach_video_handlers(cls) -> None:
         self._last_bgr = None
         self._last_pkt = None
         self._overlay_cache_dirty = True
+        # Reset overlay scale so the new stream can pick an appropriate size once.
+        self._overlay_scale = None
+        self._overlay_scale_locked = False
         self._capture.start()
         if hasattr(self, "_frame_timer"):
             self._frame_timer.start()
@@ -779,7 +414,6 @@ def attach_video_handlers(cls) -> None:
         self._overlay_cache_pixmap = None
 
     cls._motion_settings = _motion_settings
-    cls._draw_rec_indicator = _draw_rec_indicator
     cls._update_rec_indicator = _update_rec_indicator
     cls._on_orientation_changed = _on_orientation_changed
     cls._apply_orientation = _apply_orientation

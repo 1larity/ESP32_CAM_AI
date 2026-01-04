@@ -29,26 +29,30 @@ def _brush(rgb: Tuple[int, int, int], alpha: int = 80) -> QtGui.QBrush:
     return QtGui.QBrush(c)
 
 
-def _draw_box(p: QtGui.QPainter, xyxy, rgb):
+def _draw_box(p: QtGui.QPainter, xyxy, rgb, *, scale: float):
     x1, y1, x2, y2 = xyxy
     r = QtCore.QRectF(x1, y1, x2 - x1, y2 - y1)
-    p.setPen(_pen(2, rgb))
+    p.setPen(_pen(max(1, int(round(2 * scale))), rgb))
     p.setBrush(QtCore.Qt.BrushStyle.NoBrush)
     p.drawRect(r)
 
 
-def _draw_label(p: QtGui.QPainter, xyxy, text: str, rgb):
+def _draw_label(p: QtGui.QPainter, xyxy, text: str, rgb, *, scale: float):
     x1, y1, x2, y2 = xyxy
+    font = p.font()
+    base_pt = font.pointSize() if font.pointSize() > 0 else 10
+    font.setPointSize(int(max(8, round(base_pt * scale))))
+    p.setFont(font)
     fm = QtGui.QFontMetrics(p.font())
-    tw = fm.horizontalAdvance(text) + 6
-    th = fm.height() + 4
+    tw = fm.horizontalAdvance(text) + int(6 * scale)
+    th = fm.height() + int(4 * scale)
     r = QtCore.QRectF(x1, max(0, y1 - th), tw, th)
 
     p.setPen(QtCore.Qt.PenStyle.NoPen)
     p.setBrush(_brush(rgb, 200))
     p.drawRect(r)
 
-    p.setPen(_pen(1, (0, 0, 0)))
+    p.setPen(_pen(max(1, int(round(1 * scale))), (0, 0, 0)))
     p.drawText(r, QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter, text)
 
 
@@ -72,31 +76,31 @@ def _pet_color(cls: str) -> Tuple[int, int, int]:
     return (255, 0, 0)
 
 
-def _draw_yolo(p: QtGui.QPainter, boxes: list[DetBox]):
+def _draw_yolo(p: QtGui.QPainter, boxes: list[DetBox], *, scale: float):
     for d in boxes:
         rgb = _yolo_color(d.cls)
-        _draw_box(p, d.xyxy, rgb)
+        _draw_box(p, d.xyxy, rgb, scale=scale)
         text = f"{d.cls} {d.score:.2f}"
-        _draw_label(p, d.xyxy, text, rgb)
+        _draw_label(p, d.xyxy, text, rgb, scale=scale)
 
 
-def _draw_faces(p: QtGui.QPainter, boxes: list[DetBox]):
+def _draw_faces(p: QtGui.QPainter, boxes: list[DetBox], *, scale: float):
     for d in boxes:
         rgb = _face_color()
-        _draw_box(p, d.xyxy, rgb)
+        _draw_box(p, d.xyxy, rgb, scale=scale)
         # For faces, DetBox.cls is usually the label (name) if recognised.
         # Show score as a percentage to match the accept confidence UI.
         name = d.cls or "face"
         text = f"{name} {d.score * 100:.0f}%"
-        _draw_label(p, d.xyxy, text, rgb)
+        _draw_label(p, d.xyxy, text, rgb, scale=scale)
 
 
-def _draw_pets(p: QtGui.QPainter, boxes: list[DetBox]):
+def _draw_pets(p: QtGui.QPainter, boxes: list[DetBox], *, scale: float):
     for d in boxes:
         rgb = _pet_color(d.cls)
-        _draw_box(p, d.xyxy, rgb)
+        _draw_box(p, d.xyxy, rgb, scale=scale)
         text = f"{d.cls} {d.score:.2f}"
-        _draw_label(p, d.xyxy, text, rgb)
+        _draw_label(p, d.xyxy, text, rgb, scale=scale)
 
 
 def _draw_hud(p: QtGui.QPainter, pkt: DetectionPacket):
@@ -120,20 +124,20 @@ def _draw_hud(p: QtGui.QPainter, pkt: DetectionPacket):
     p.drawText(r, QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter, text)
 
 
-def draw_overlays(p: QtGui.QPainter, pkt: DetectionPacket, flags: OverlayFlags):
+def draw_overlays(p: QtGui.QPainter, pkt: DetectionPacket, flags: OverlayFlags, *, scale: float = 1.0):
     """
     Draw all overlays for a given detection packet.
 
     Order: boxes → labels → crosshair + HUD.
     """
     if flags.yolo and pkt.yolo:
-        _draw_yolo(p, pkt.yolo)
+        _draw_yolo(p, pkt.yolo, scale=scale)
 
     if flags.faces and pkt.faces:
-        _draw_faces(p, pkt.faces)
+        _draw_faces(p, pkt.faces, scale=scale)
 
     if flags.pets and pkt.pets:
-        _draw_pets(p, pkt.pets)
+        _draw_pets(p, pkt.pets, scale=scale)
 
     # Tracks not implemented yet; left as a hook.
     # if flags.tracks: ...

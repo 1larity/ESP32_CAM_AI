@@ -9,28 +9,28 @@
   "yolo_url": null,
   "haar_url": null,
   "face_model": "C:\\Users\\stellaris\\Documents\\PlatformIO\\Projects\\ESP32_CAM_AI\\AI\\models\\face_yunet.onnx",
-  "window_geometry": "01d9d0cb00030000fffff600fffffff8ffffffff0000059ffffff9530000016cfffffe520000043b00000001020000000a00fffff60000000017ffffffff0000059f",
-  "window_state": "000000ff00000000fd00000001000000010000011b00000573fc0200000001fb00000014006500760065006e007400730044006f0063006b0100000016000005730000009100ffffff000008e10000057300000004000000040000000800000008fc00000000",
+  "window_geometry": "01d9d0cb0003000000000000fffffff8000009ff00000577000000ab00000199000007080000046800000000020000000a000000000000000017000009ff00000577",
+  "window_state": "000000ff00000000fd00000001000000010000011b0000054bfc0200000001fb00000014006500760065006e007400730044006f0063006b01000000160000054b0000009100ffffff000008e10000054b00000004000000040000000800000008fc00000000",
   "window_geometries": {
     "Cam-2": [
       1137,
-      698,
+      678,
       1136,
-      697,
+      677,
       0
     ],
     "Cam-1": [
       1137,
       0,
       1136,
-      698,
+      678,
       0
     ],
     "192.168.1.78": [
       0,
       0,
       1137,
-      1395,
+      1355,
       0
     ]
   },
@@ -56,7 +56,7 @@
   "mqtt_base_topic": "esp32_cam_ai",
   "mqtt_discovery_prefix": "homeassistant",
   "mqtt_user": "homeassistant",
-  "mqtt_password_enc": "tZh0vD6CfYnCp6/rNTOdEus3fNdCdmBaXkI/vxZ8Z24LAQtic9YZ/S4XNeo3ND4kGZe3Ue0=",
+  "mqtt_password_enc": "nq8QJOBjz0Lbsp0B+Ix314UkaTiTfXwTQ3FR0IIxA9S+hw8w4YyhcLK0GaiLn8x1WNSRtYo=",
   "cameras": [
     {
       "name": "Cam-2",
@@ -65,10 +65,6 @@
       "token": null,
       "alt_streams": [],
       "view_scale": 1.0,
-      "flash_mode": "off",
-      "flash_level": 0,
-      "flash_auto_target": 80,
-      "flash_auto_hyst": 15,
       "record_motion": false,
       "motion_sensitivity": 53,
       "ai_enabled": true,
@@ -78,7 +74,7 @@
       "rotation_deg": 0,
       "flip_horizontal": false,
       "flip_vertical": false,
-      "password_enc": "F6iUq0tSTsKC5F9XLBj/m6A4WmGxdkUjyr7XXROPnJyyW6krVm5g+is28OlAyvEUc7tcsx4="
+      "password_enc": "GapT39TxrL5juKp+jFratniumpUUlkGzz7qou/Ke3AgWY7Md5CJsbXd5+oUvkDexG9q524c="
     },
     {
       "name": "Cam-1",
@@ -87,11 +83,7 @@
       "token": null,
       "alt_streams": [],
       "view_scale": 1.0,
-      "flash_mode": "off",
-      "flash_level": 0,
-      "flash_auto_target": 80,
-      "flash_auto_hyst": 15,
-      "record_motion": false,
+      "record_motion": true,
       "motion_sensitivity": 53,
       "ai_enabled": true,
       "ai_yolo": true,
@@ -100,7 +92,7 @@
       "rotation_deg": 0,
       "flip_horizontal": false,
       "flip_vertical": false,
-      "password_enc": "Ny/sIpTOxA3xCR/ipiD0TZi/oBlZt9lhdn0AP8gcM40kvICPb2FWNol6+JDqWlDfvX9PY1A="
+      "password_enc": "gvxQXc1xMF81qIWHUo1KVcNyScrpA+6DewqRRaYSXXeGTnmDJP7L0A4rwwDQ0obl0flJK4s="
     },
     {
       "name": "192.168.1.78",
@@ -108,14 +100,13 @@
       "user": "admin",
       "token": null,
       "alt_streams": [
-        "rtsp://192.168.1.78:8554/Streaming/Channels/101",
-        "rtsp://192.168.1.78:554/Streaming/Channels/101"
+        "rtsp://192.168.1.78:554/Streaming/Channels/101",
+        "rtsp://192.168.1.78:8554/Streaming/Channels/102",
+        "rtsp://192.168.1.78:8554/Streaming/Channels/201",
+        "rtsp://192.168.1.78:554/Streaming/Channels/102",
+        "rtsp://192.168.1.78:554/Streaming/Channels/201"
       ],
-      "view_scale": 0.5513680000000001,
-      "flash_mode": "off",
-      "flash_level": 128,
-      "flash_auto_target": 80,
-      "flash_auto_hyst": 15,
+      "view_scale": 0.4521217600000001,
       "record_motion": false,
       "motion_sensitivity": 53,
       "ai_enabled": true,
@@ -125,7 +116,7 @@
       "rotation_deg": 0,
       "flip_horizontal": false,
       "flip_vertical": true,
-      "password_enc": "zW0VXqPguAgjqTskKGPq1VV6T+pvXYFs6kr+zE5Juu/POWAmS4iSafcMjK2sfZWvRrOWfA=="
+      "password_enc": "R6FFpq7453GyYZg/1q6FAD8bhqUSaJIXXDP0tkWkZjrQ4WSeaX30yNuSJ5x929F0Njb0wA=="
     }
   ]
 }

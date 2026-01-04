@@ -6,10 +6,10 @@ import json, os
 
 @dataclass
 class FaceParams:
-    accept_conf: float = 95.0      # LBPH accept if conf <= accept_conf
+    accept_conf: float = 60.0      # LBPH accept if conf <= accept_conf (lower is stricter)
     roi_size: int = 128            # square ROI for LBPH
     eq_hist: bool = True           # apply cv.equalizeHist on ROI
-    min_face_px: int = 48          # ignore faces smaller than this
+    min_face_px: int = 96          # ignore faces smaller than this
     smooth_n: int = 3              # EMA for displayed score/conf
     presence_ttl_ms: int = 6000    # Grace period for presence enter/exit
 
