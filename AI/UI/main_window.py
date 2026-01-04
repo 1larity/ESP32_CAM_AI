@@ -715,6 +715,7 @@ class MainWindow(QtWidgets.QMainWindow):
         Remove auto-trained unknowns (auto_person_*/auto_pet_*) and rebuild LBPH.
         """
         face_root = BASE_DIR / "data" / "faces"
+        pet_root = BASE_DIR / "data" / "pets"
         removed = []
         for child in face_root.iterdir():
             if not child.is_dir():
@@ -726,6 +727,20 @@ class MainWindow(QtWidgets.QMainWindow):
                     removed.append(name)
                 except Exception:
                     continue
+        # Auto-trained pets belong under data/pets; also remove them there.
+        try:
+            for child in pet_root.iterdir():
+                if not child.is_dir():
+                    continue
+                name = child.name
+                if name.startswith("auto_pet_"):
+                    try:
+                        shutil.rmtree(child)
+                        removed.append(name)
+                    except Exception:
+                        continue
+        except Exception:
+            pass
         msg = "No auto-trained folders found." if not removed else f"Removed: {', '.join(removed)}"
         QtWidgets.QMessageBox.information(self, "Purge auto-trained unknowns", f"{msg}\nRebuilding face model...")
         self._start_face_rebuild("Rebuilding face model without auto-trained unknowns")

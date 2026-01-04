@@ -48,10 +48,12 @@ class EnrollmentService(QtCore.QObject):
 
         # Where face crops and models are stored
         self.face_dir: Path = BASE_DIR / "data" / "faces"
+        self.pet_dir: Path = BASE_DIR / "data" / "pets"
         self.unknown_face_dir: Path = BASE_DIR / "data" / "unknown_faces"
         self.unknown_pet_dir: Path = BASE_DIR / "data" / "unknown_pets"
         self.models_dir: Path = BASE_DIR / "models"
         self.face_dir.mkdir(parents=True, exist_ok=True)
+        self.pet_dir.mkdir(parents=True, exist_ok=True)
         self.unknown_face_dir.mkdir(parents=True, exist_ok=True)
         self.unknown_pet_dir.mkdir(parents=True, exist_ok=True)
         self.models_dir.mkdir(parents=True, exist_ok=True)
@@ -304,13 +306,15 @@ class EnrollmentService(QtCore.QObject):
         try:
             from cv2 import imwrite
             label_prefix = "auto_pet" if is_pet else "auto_person"
-            out_dir = self.face_dir / f"{label_prefix}_{cam_name}"
+            base_dir = self.pet_dir if is_pet else self.face_dir
+            out_dir = base_dir / f"{label_prefix}_{cam_name}"
             out_dir.mkdir(parents=True, exist_ok=True)
             fname = f"{label_prefix}_{self._auto_label_idx:05d}.jpg"
             self._auto_label_idx += 1
             imwrite(str(out_dir / fname), roi)
-            # Kick rebuild asynchronously
-            QtCore.QTimer.singleShot(0, self._train_now)
+            # Kick rebuild asynchronously (faces only); pets are stored for the Pets manager.
+            if not is_pet:
+                QtCore.QTimer.singleShot(0, self._train_now)
         except Exception:
             pass
 
@@ -348,7 +352,7 @@ class EnrollmentService(QtCore.QObject):
         for cam_dir in self.unknown_pet_dir.glob("*"):
             if not cam_dir.is_dir():
                 continue
-            dest = self.face_dir / f"auto_pet_{cam_dir.name}"
+            dest = self.pet_dir / f"auto_pet_{cam_dir.name}"
             if dest.exists() and any(dest.glob("*.jpg")):
                 continue
             files = sorted(cam_dir.glob("*.jpg"))

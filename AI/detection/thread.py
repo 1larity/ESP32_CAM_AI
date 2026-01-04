@@ -166,18 +166,24 @@ class DetectorThread(QtCore.QThread):
             f"use_gpu={self.cfg.use_gpu}"
         )
 
-    def _lbph_models_mtime(self) -> float:
+    def _lbph_models_mtime(self) -> int:
+        """
+        Return a high-resolution mtime marker for the LBPH model+labels files.
+
+        Note: on some platforms, float mtimes can lose precision and cause hot-reload
+        to miss quick successive retrains, so we use nanosecond mtimes.
+        """
         try:
             xml = os.path.join(self.models_dir, "lbph_faces.xml")
             labels = os.path.join(self.models_dir, "labels_faces.json")
-            return max(os.path.getmtime(xml), os.path.getmtime(labels))
+            return max(os.stat(xml).st_mtime_ns, os.stat(labels).st_mtime_ns)
         except Exception:
-            return 0.0
+            return 0
 
     def _maybe_reload_lbph(self) -> None:
         try:
             mtime = self._lbph_models_mtime()
-            if mtime > getattr(self, "_lbph_mtime", 0):
+            if mtime > int(getattr(self, "_lbph_mtime", 0) or 0):
                 self._rec, self._labels = load_lbph(self.models_dir)
                 self._lbph_mtime = mtime
                 print(f"[Detector:{self.name}] reloaded LBPH models (labels={len(self._labels)})")
@@ -274,6 +280,9 @@ class DetectorThread(QtCore.QThread):
             t1 = monotonic_ms()
 
             if self._face_dnn is not None:
+                # Hot-reload LBPH if models changed on disk (e.g., purge / image manager / auto-train).
+                if self.cfg.use_lbph:
+                    self._maybe_reload_lbph()
                 face_boxes, t_faces = run_faces_dnn(
                     bgr,
                     self._face_dnn,

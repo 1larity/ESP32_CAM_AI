@@ -180,6 +180,10 @@ def train_lbph_models(face_dir: str, models_dir: str) -> bool:
     next_id = 0
 
     for p in sorted(subs):
+        # Pets are stored under data/pets; ignore any legacy auto_pet_* folders that may
+        # still exist under data/faces from older versions.
+        if p.name.startswith("auto_pet_"):
+            continue
         label_map[p.name] = next_id
         label_id = next_id
         next_id += 1
@@ -197,6 +201,16 @@ def train_lbph_models(face_dir: str, models_dir: str) -> bool:
             labels_arr.append(label_id)
 
     if not imgs:
+        # If the user purged all samples, clear any previous on-disk model so
+        # we don't keep recognising stale labels.
+        try:
+            models_path = Path(models_dir)
+            for f in ("lbph_faces.xml", "labels_faces.json"):
+                p = models_path / f
+                if p.exists():
+                    p.unlink()
+        except Exception:
+            pass
         return False
 
     try:
