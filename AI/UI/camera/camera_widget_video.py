@@ -8,10 +8,12 @@ from urllib.parse import urlparse
 import requests
 import numpy as np
 import cv2
-from PySide6 import QtCore, QtGui
+from PySide6 import QtCore, QtGui, QtWidgets
 from PySide6.QtCore import Slot
 from detectors import DetectionPacket
 from enrollment import EnrollmentService
+from settings import save_settings
+from stream import StreamCapture
 from utils import qimage_from_bgr, debug, monotonic_ms
 from ..overlays import draw_overlays
 from ..overlay_stats import FpsCounter, compute_yolo_stats, YoloStats
@@ -66,6 +68,18 @@ def attach_video_handlers(cls) -> None:
             self._overlay_cache_pixmap.fill(QtCore.Qt.GlobalColor.transparent)
             self._overlay_cache_dirty = True
             self._overlay_cache_key = None
+            self._overlay_scale = self._overlay_scale_factor(w, h)
+        else:
+            self._overlay_scale = self._overlay_scale_factor(w, h)
+
+    def _overlay_scale_factor(self, w: int, h: int) -> float:
+        """
+        Scale overlays relative to video resolution so text remains readable
+        even when high-res streams are downscaled in the view.
+        """
+        base = max(1, min(w, h))
+        scale = base / 480.0
+        return max(1.0, min(3.0, scale))
 
     def _render_overlay_cache(
         self, pkt: Optional[DetectionPacket], w: int, h: int, now_ms: int
@@ -78,6 +92,8 @@ def attach_video_handlers(cls) -> None:
           - Overlays are cached and only redrawn when "something changes"
         """
         self._overlay_cache_pixmap.fill(QtCore.Qt.GlobalColor.transparent)
+        scale = self._overlay_scale_factor(w, h)
+        self._overlay_scale = scale
 
         painter = QtGui.QPainter(self._overlay_cache_pixmap)
         try:
@@ -279,22 +295,24 @@ def attach_video_handlers(cls) -> None:
 
     def _draw_hud(self, p: QtGui.QPainter) -> None:
         text = f"{self.cam_cfg.name}  {time.strftime('%Y-%m-%d %H:%M:%S')}"
-        margin = 6
+        scale = float(getattr(self, "_overlay_scale", 1.0) or 1.0)
+        margin = int(6 * scale)
 
         p.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255)))
         font = p.font()
-        font.setPointSize(max(font.pointSize(), 9))
+        base_pt = font.pointSize() if font.pointSize() > 0 else 9
+        font.setPointSize(int(max(base_pt, 9 * scale)))
         p.setFont(font)
 
         fm = QtGui.QFontMetrics(font)
         rect = fm.boundingRect(text)
-        rect = QtCore.QRectF(margin, margin, rect.width() + 8, rect.height() + 4)
+        rect = QtCore.QRectF(margin, margin, rect.width() + 8 * scale, rect.height() + 4 * scale)
 
         bg = QtGui.QColor(0, 0, 0, 128)
         p.fillRect(rect, bg)
 
         p.drawText(
-            rect.adjusted(4, 0, -4, 0),
+            rect.adjusted(4 * scale, 0, -4 * scale, 0),
             QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter,
             text,
         )
@@ -302,7 +320,8 @@ def attach_video_handlers(cls) -> None:
     def _draw_stats_line(
         self, p: QtGui.QPainter, fps: float, stats: YoloStats, width: int, height: int
     ) -> None:
-        margin = 6
+        scale = float(getattr(self, "_overlay_scale", 1.0) or 1.0)
+        margin = int(6 * scale)
         text = (
             f"FPS: {fps:4.1f} | "
             f"faces: {stats.faces} ({stats.known_faces} known) | "
@@ -310,19 +329,21 @@ def attach_video_handlers(cls) -> None:
         )
 
         font = p.font()
+        base_pt = font.pointSize() if font.pointSize() > 0 else 9
+        font.setPointSize(int(max(base_pt, 9 * scale)))
         fm = QtGui.QFontMetrics(font)
         text_width = fm.horizontalAdvance(text)
         text_height = fm.height()
 
         x = margin
         y = height - margin
-        rect = QtCore.QRectF(x - 4, y - text_height - 2, text_width + 8, text_height + 4)
+        rect = QtCore.QRectF(x - 4 * scale, y - text_height - 2 * scale, text_width + 8 * scale, text_height + 4 * scale)
 
         bg = QtGui.QColor(0, 0, 0, 128)
         p.fillRect(rect, bg)
         p.setPen(QtGui.QColor(255, 255, 255))
         p.drawText(
-            rect.adjusted(4, 0, -4, 0),
+            rect.adjusted(4 * scale, 0, -4 * scale, 0),
             QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter,
             text,
         )
@@ -391,6 +412,7 @@ def attach_video_handlers(cls) -> None:
 
     cls._overlay_toggles_key = _overlay_toggles_key
     cls._ensure_overlay_cache = _ensure_overlay_cache
+    cls._overlay_scale_factor = _overlay_scale_factor
     cls._render_overlay_cache = _render_overlay_cache
     cls._invalidate_overlay_cache = _invalidate_overlay_cache
 
@@ -666,6 +688,96 @@ def attach_video_handlers(cls) -> None:
                 self._auto_recording_active = False
                 self._update_rec_indicator(False)
 
+    # ----------------------------
+    # Stream variants (main/sub)
+    # ----------------------------
+
+    def _compute_stream_variants(self) -> list[tuple[str, str]]:
+        """
+        Build a deduped list of (label, url) variants (e.g., main/substream).
+        """
+        seen: set[str] = set()
+        variants: list[tuple[str, str]] = []
+
+        def add(url: Optional[str], label: str) -> None:
+            if not url:
+                return
+            url = url.strip()
+            if not url or url in seen:
+                return
+            seen.add(url)
+            variants.append((label, url))
+
+        current = getattr(self.cam_cfg, "stream_url", None)
+        add(current, "Primary")
+
+        for u in getattr(self.cam_cfg, "alt_streams", []) or []:
+            add(u, "Alt")
+
+        # Heuristic variants for common ONVIF/RTSP layouts
+        if current:
+            repls = [
+                ("/101", "/102"),
+                ("/102", "/101"),
+                ("/Streaming/Channels/101", "/Streaming/Channels/102"),
+                ("/Streaming/Channels/1", "/Streaming/Channels/2"),
+                ("/live/ch0", "/live/ch1"),
+                ("/ch0", "/ch1"),
+            ]
+            for old, new in repls:
+                if old in current:
+                    add(current.replace(old, new, 1), f"Variant {new}")
+        return variants
+
+    def _rebuild_stream_menu(self) -> None:
+        if not hasattr(self, "menu_stream"):
+            return
+        self.menu_stream.clear()
+        variants = self._compute_stream_variants()
+        if not variants:
+            act = self.menu_stream.addAction("No variants found")
+            act.setEnabled(False)
+            return
+        for label, url in variants:
+            act = self.menu_stream.addAction(f"{label}: {url}")
+            act.setData(url)
+            act.triggered.connect(lambda _=False, u=url: self._apply_stream_url(u))
+        self.menu_stream.addSeparator()
+        act_custom = self.menu_stream.addAction("Custom URL...")
+        act_custom.triggered.connect(self._prompt_custom_stream)
+
+    def _prompt_custom_stream(self) -> None:
+        txt, ok = QtWidgets.QInputDialog.getText(self, "Stream URL", "Enter stream URL:")
+        if ok and txt:
+            self._apply_stream_url(txt.strip())
+
+    def _apply_stream_url(self, url: str) -> None:
+        url = (url or "").strip()
+        if not url or url == getattr(self.cam_cfg, "stream_url", None):
+            return
+        # Pause polling and swap the capture backend.
+        if hasattr(self, "_frame_timer"):
+            self._frame_timer.stop()
+        try:
+            self._capture.stop()
+        except Exception:
+            pass
+        self.cam_cfg.stream_url = url
+        try:
+            # Persist immediately so NVR-friendly substream sticks.
+            save_settings(self.app_cfg)
+        except Exception:
+            pass
+        self._capture = StreamCapture(self.cam_cfg)
+        self._last_bgr = None
+        self._last_pkt = None
+        self._overlay_cache_dirty = True
+        self._capture.start()
+        if hasattr(self, "_frame_timer"):
+            self._frame_timer.start()
+        # recompute overlay cache scale after swap
+        self._overlay_cache_pixmap = None
+
     cls._motion_settings = _motion_settings
     cls._draw_rec_indicator = _draw_rec_indicator
     cls._update_rec_indicator = _update_rec_indicator
@@ -674,3 +786,7 @@ def attach_video_handlers(cls) -> None:
     cls._evaluate_auto_record = _evaluate_auto_record
     cls._motion_trigger = _motion_trigger
     cls._evaluate_motion_only = _evaluate_motion_only
+    cls._compute_stream_variants = _compute_stream_variants
+    cls._rebuild_stream_menu = _rebuild_stream_menu
+    cls._apply_stream_url = _apply_stream_url
+    cls._prompt_custom_stream = _prompt_custom_stream

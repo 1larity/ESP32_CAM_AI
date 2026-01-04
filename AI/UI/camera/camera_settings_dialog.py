@@ -36,6 +36,47 @@ class CameraSettingsDialog(QtWidgets.QDialog):
         self.s_motion.setTickPosition(QtWidgets.QSlider.TickPosition.TicksBelow)
         layout.addRow("Motion sensitivity:", self._wrap_slider(self.s_motion))
 
+        # Stream variants (show only when applicable)
+        self._stream_variants = []
+        self._custom_stream_url = None
+        try:
+            if hasattr(widget, "_compute_stream_variants"):
+                self._stream_variants = widget._compute_stream_variants()
+        except Exception:
+            self._stream_variants = []
+        # Dedup by URL, keep first label
+        uniq = []
+        seen = set()
+        for label, url in self._stream_variants:
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            uniq.append((label, url))
+        self._stream_variants = uniq
+        show_stream = False
+        current_url = getattr(cam_cfg, "stream_url", "") or ""
+        if current_url.startswith(("rtsp://", "http://", "https://")):
+            show_stream = len(self._stream_variants) > 1 or bool(getattr(cam_cfg, "alt_streams", None))
+
+        if show_stream:
+            self.cb_stream = QtWidgets.QComboBox()
+            for label, url in self._stream_variants:
+                self.cb_stream.addItem(f"{label}: {url}", userData=url)
+            # ensure current URL is present and selected
+            if current_url and current_url not in seen:
+                self.cb_stream.addItem(f"Current: {current_url}", userData=current_url)
+            for idx in range(self.cb_stream.count()):
+                if self.cb_stream.itemData(idx) == current_url:
+                    self.cb_stream.setCurrentIndex(idx)
+                    break
+            btn_custom = QtWidgets.QPushButton("Custom stream...")
+            btn_custom.clicked.connect(self._prompt_custom_stream)
+            stream_row = QtWidgets.QHBoxLayout()
+            stream_row.setContentsMargins(0, 0, 0, 0)
+            stream_row.addWidget(self.cb_stream, 1)
+            stream_row.addWidget(btn_custom)
+            layout.addRow("Stream:", stream_row)
+
         # LED / flash controls
         self.cb_flash = QtWidgets.QComboBox()
         self.cb_flash.addItems(["Off", "On", "Auto"])
@@ -122,6 +163,19 @@ class CameraSettingsDialog(QtWidgets.QDialog):
         slider.valueChanged.connect(lambda v: lbl.setText(str(int(v))))
         return c
 
+    def _prompt_custom_stream(self) -> None:
+        txt, ok = QtWidgets.QInputDialog.getText(self, "Stream URL", "Enter stream URL:", text=self.cam_cfg.stream_url)
+        if ok and txt:
+            url = txt.strip()
+            if url:
+                self._custom_stream_url = url
+                if hasattr(self, "cb_stream"):
+                    idx = self.cb_stream.findData(url)
+                    if idx == -1:
+                        self.cb_stream.addItem(f"Custom: {url}", userData=url)
+                        idx = self.cb_stream.count() - 1
+                    self.cb_stream.setCurrentIndex(idx)
+
     def apply(self):
         # Motion
         self.cam_cfg.record_motion = self.cb_motion.isChecked()
@@ -194,3 +248,21 @@ class CameraSettingsDialog(QtWidgets.QDialog):
         self.widget.act_overlay_detections.setChecked(det_on)
         self.widget.act_overlay_hud.setChecked(hud_on)
         self.widget.act_overlay_stats.setChecked(stats_on)
+
+        # Stream selection (if applicable)
+        if hasattr(self, "cb_stream"):
+            selected = self._custom_stream_url
+            if not selected:
+                selected = self.cb_stream.currentData()
+            if selected:
+                selected = selected.strip()
+            if selected and selected != getattr(self.widget.cam_cfg, "stream_url", None):
+                self.widget._apply_stream_url(selected)
+            # Persist alt streams as any other known variants except primary
+            all_urls = []
+            for i in range(self.cb_stream.count()):
+                u = self.cb_stream.itemData(i)
+                if u:
+                    all_urls.append(u)
+            primary = getattr(self.widget.cam_cfg, "stream_url", None)
+            self.widget.cam_cfg.alt_streams = [u for u in all_urls if u and u != primary]

@@ -4,7 +4,7 @@ from __future__ import annotations
 import threading
 import queue
 import time
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 from urllib.parse import urlparse, urlunparse
 
 import cv2 as cv
@@ -49,28 +49,70 @@ class StreamCapture:
 
     # ---------- internals ----------
     def _run(self):
-        url = self.cam.effective_url()
-        parsed = urlparse(url)
         while not self._stop.is_set():
-            try:
-                if parsed.scheme in ("rtsp",):
-                    ok = self._run_opencv(url)
-                    if not ok:
-                        self._fail_once("cv-no-rtsp")
-                elif parsed.scheme in ("http", "https"):
-                    # Try OpenCV first; if fails, fallback to MJPEG
-                    ok = self._run_opencv(url)
-                    if not ok:
-                        ok = self._run_mjpeg(url)
+            success = False
+            for url in self._candidate_urls():
+                parsed = urlparse(url)
+                try:
+                    if parsed.scheme in ("rtsp",):
+                        ok = self._run_opencv(url)
+                        success = success or ok
+                        if ok:
+                            break
+                    elif parsed.scheme in ("http", "https"):
+                        ok = self._run_opencv(url)
                         if not ok:
-                            self._fail_once("mjpeg-fail")
-                else:
-                    self._fail_once("bad-url")
-                # short backoff before retry
+                            ok = self._run_mjpeg(url)
+                        success = success or ok
+                        if ok:
+                            break
+                    else:
+                        self._fail_once("bad-url")
+                except Exception:
+                    self._fail_once("exception")
+                    continue
+            if not success:
+                self._fail_once("all-candidates")
+            try:
                 self._sleep_with_cancel(1.0)
             except Exception:
-                self._fail_once("exception")
                 self._sleep_with_cancel(1.0)
+
+    def _candidate_urls(self) -> List[str]:
+        """
+        Return candidate URLs to try (primary, alt_streams, and common substream variants).
+        """
+        seen: set[str] = set()
+        urls: List[str] = []
+
+        def add(u: Optional[str]) -> None:
+            if not u:
+                return
+            u = u.strip()
+            if not u or u in seen:
+                return
+            seen.add(u)
+            urls.append(u)
+
+        add(self.cam.effective_url())
+        for u in getattr(self.cam, "alt_streams", []) or []:
+            add(u)
+
+        # Heuristic variants (e.g., main/sub stream swaps)
+        base = self.cam.effective_url()
+        if base:
+            variants = [
+                ("/101", "/102"),
+                ("/102", "/101"),
+                ("/Streaming/Channels/101", "/Streaming/Channels/102"),
+                ("/Streaming/Channels/1", "/Streaming/Channels/2"),
+                ("/live/ch0", "/live/ch1"),
+                ("/ch0", "/ch1"),
+            ]
+            for old, new in variants:
+                if old in base:
+                    add(base.replace(old, new, 1))
+        return urls
 
     def _run_opencv(self, url: str) -> bool:
         cap = None

@@ -35,7 +35,6 @@ def init_camera_widget(self) -> None:
     tb = QtWidgets.QHBoxLayout()
     self.btn_rec = QtWidgets.QPushButton("REC")
     self.btn_snap = QtWidgets.QPushButton("Snapshot")
-
     # View menu (replaces Fit / 100% / Fit win buttons)
     self.btn_view_menu = QtWidgets.QToolButton()
     self.btn_view_menu.setText("View")
@@ -212,6 +211,18 @@ def init_camera_widget(self) -> None:
     self._subwindow = None
     self._locked_geometry = QtCore.QRect()
 
+    # Apply persisted zoom level (view scale)
+    try:
+        init_scale = float(getattr(self.cam_cfg, "view_scale", 1.0) or 1.0)
+    except Exception:
+        init_scale = 1.0
+    try:
+        self.view._scale = init_scale
+        self.view.resetTransform()
+        self.view.scale(init_scale, init_scale)
+    except Exception:
+        pass
+
     # ------------------------------------------------------------------
     # Wiring
     # ------------------------------------------------------------------
@@ -233,6 +244,10 @@ def init_camera_widget(self) -> None:
     # Lock
     self.btn_lock.toggled.connect(self._on_lock_toggled)
     self.btn_info.clicked.connect(self._show_info)
+    try:
+        self.view.zoomChanged.connect(self._on_zoom_changed)
+    except Exception:
+        pass
 
     # AI + overlay menu actions
     self.act_ai_enabled.toggled.connect(self._on_ai_toggled)

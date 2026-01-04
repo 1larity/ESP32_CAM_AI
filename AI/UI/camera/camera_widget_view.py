@@ -29,6 +29,17 @@ def attach_view_handlers(cls) -> None:
             w = w.parentWidget()
         return None
 
+    def _set_view_scale(self, scale: float) -> None:
+        scale = float(max(0.1, min(8.0, scale)))
+        self.view.resetTransform()
+        self.view._scale = scale
+        self.view.scale(scale, scale)
+        self._update_scrollbars()
+        try:
+            self.cam_cfg.view_scale = scale
+        except Exception:
+            pass
+
     def fit_window_to_video(self) -> None:
         """
         Resize the camera subwindow so that the visible video area matches
@@ -84,6 +95,12 @@ def attach_view_handlers(cls) -> None:
         sub.setGeometry(geom)
 
         QtCore.QTimer.singleShot(0, self._update_scrollbars)
+        # update stored scale based on current transform
+        try:
+            current_scale = self.view.transform().m11()
+            self.cam_cfg.view_scale = float(current_scale)
+        except Exception:
+            pass
 
     def _on_lock_toggled(self, checked: bool) -> None:
         """
@@ -210,21 +227,30 @@ def attach_view_handlers(cls) -> None:
         """
         if self._scene is None:
             return
+        scene_rect = self._scene.sceneRect()
+        if scene_rect.isEmpty():
+            return
         self.view.fitInView(
-            self._scene.sceneRect(),
+            scene_rect,
             QtCore.Qt.AspectRatioMode.KeepAspectRatio,
         )
-        # Reset our logical scale tracking
-        self.view._scale = 1.0
-        self._update_scrollbars()
+        try:
+            scale = self.view.transform().m11()
+        except Exception:
+            scale = 1.0
+        # Don't override stored scale unless fit actually applied something
+        if scene_rect.width() > 0 and scene_rect.height() > 0:
+            self._set_view_scale(scale)
 
     def zoom_100(self) -> None:
         """
         Reset zoom to 100% and update scrollbars.
         """
-        self.view.resetTransform()
-        self.view._scale = 1.0
-        self._update_scrollbars()
+        self._set_view_scale(1.0)
+
+    def _on_zoom_changed(self, scale: float) -> None:
+        # GraphicsView wheel zoom callback
+        self._set_view_scale(scale)
 
     # Bind helpers into the target class
     cls.fit_window_to_video = fit_window_to_video
@@ -235,3 +261,5 @@ def attach_view_handlers(cls) -> None:
     cls.resizeEvent = resizeEvent
     cls.fit_to_window = fit_to_window
     cls.zoom_100 = zoom_100
+    cls._set_view_scale = _set_view_scale
+    cls._on_zoom_changed = _on_zoom_changed

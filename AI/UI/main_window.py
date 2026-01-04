@@ -13,6 +13,7 @@ from UI.image_manager import ImageManagerDialog
 from UI.events_pane import EventsPane
 from UI.discovery_dialog import DiscoveryDialog
 from UI.ip_cam_dialog import AddIpCameraDialog
+from UI.onvif_dialog import OnvifDiscoveryDialog
 from UI.camera import CameraWidget
 from UI.face_tuner import FaceRecTunerDialog
 from UI.mqtt_settings import MqttSettingsDialog
@@ -256,6 +257,15 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._add_camera_window(cam_cfg)
                 save_settings(self.app_cfg)
 
+    def _open_onvif_discovery(self) -> None:
+        dlg = OnvifDiscoveryDialog(self)
+        if dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+            cam_cfg = dlg.selected_camera()
+            if cam_cfg is not None:
+                self.app_cfg.cameras.append(cam_cfg)
+                self._add_camera_window(cam_cfg)
+                save_settings(self.app_cfg)
+
     def _open_mqtt_settings(self) -> None:
         dlg = MqttSettingsDialog(self.app_cfg, self)
         dlg.exec()
@@ -399,6 +409,9 @@ class MainWindow(QtWidgets.QMainWindow):
         m_cams.addSeparator()
         m_cams.addAction("Discover ESP32-CAMs…").triggered.connect(
             self._open_discovery
+        )
+        m_cams.addAction("Discover ONVIF Cameras…").triggered.connect(
+            self._open_onvif_discovery
         )
 
         # Tools

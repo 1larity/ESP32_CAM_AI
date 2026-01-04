@@ -26,6 +26,8 @@ class CameraSettings:
     user: Optional[str] = None
     password: Optional[str] = None
     token: Optional[str] = None
+    alt_streams: list[str] = field(default_factory=list)  # optional alternates (e.g., substreams /102)
+    view_scale: float = 1.0           # persisted zoom level
     flash_mode: str = "off"         # off | on | auto
     flash_level: int = 128          # 0-255
     flash_auto_target: int = 80     # desired brightness (0-255)
@@ -118,6 +120,8 @@ def load_settings() -> AppSettings:
                     user=c.get("user"),
                     password=pwd,
                     token=c.get("token"),
+                    alt_streams=c.get("alt_streams", []) or [],
+                    view_scale=float(c.get("view_scale", 1.0) or 1.0),
                     flash_mode=c.get("flash_mode", "off"),
                     flash_level=max(0, min(255, int(c.get("flash_level", 128)))),
                     flash_auto_target=int(c.get("flash_auto_target", 80)),
