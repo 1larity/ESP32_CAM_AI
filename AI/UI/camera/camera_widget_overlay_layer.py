@@ -51,12 +51,23 @@ def attach_overlay_layer(cls) -> None:
             self._overlay_cache_pixmap.fill(QtCore.Qt.GlobalColor.transparent)
             self._overlay_cache_dirty = True
             self._overlay_cache_key = None
-        # Set scale once per stream; keep stable to avoid flicker unless unlocked.
-        if not hasattr(self, "_overlay_scale_locked"):
-            self._overlay_scale_locked = False
-        if (not getattr(self, "_overlay_scale_locked", False)) or not hasattr(self, "_overlay_scale"):
-            self._overlay_scale = self._overlay_scale_factor(w, h)
-            self._overlay_scale_locked = True
+        # Set scale once per camera; keep stable to avoid flicker/resizes.
+        if not hasattr(self, "_overlay_scale"):
+            self._overlay_scale = None
+        if not hasattr(self, "_overlay_scale_set"):
+            self._overlay_scale_set = False
+        if not self._overlay_scale_set:
+            stored = getattr(self.cam_cfg, "overlay_scale", None)
+            if stored is not None:
+                self._overlay_scale = float(stored)
+                self._overlay_scale_set = True
+            elif w > 0 and h > 0:
+                self._overlay_scale = self._overlay_scale_factor(w, h)
+                self._overlay_scale_set = True
+                try:
+                    self.cam_cfg.overlay_scale = float(self._overlay_scale)
+                except Exception:
+                    pass
 
     def _render_overlay_cache(
         self, pkt, w: int, h: int, now_ms: int
@@ -173,85 +184,102 @@ def attach_overlay_layer(cls) -> None:
         self._scene.setSceneRect(QtCore.QRectF(base.rect()))
 
     def _draw_hud(self, p: QtGui.QPainter) -> None:
-        text = f"{self.cam_cfg.name}  {time.strftime('%Y-%m-%d %H:%M:%S')}"
-        scale = float(getattr(self, "_overlay_scale", 1.0) or 1.0)
-        margin = int(6 * scale)
+        p.save()
+        try:
+            text = f"{self.cam_cfg.name}  {time.strftime('%Y-%m-%d %H:%M:%S')}"
+            scale = float(getattr(self, "_overlay_scale", 1.0) or 1.0)
+            margin = int(6 * scale)
 
-        p.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255)))
-        font = p.font()
-        base_pt = font.pointSize() if font.pointSize() > 0 else 9
-        font.setPointSize(int(max(base_pt, 9 * scale)))
-        p.setFont(font)
+            p.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255)))
+            font = QtGui.QFont(p.font())
+            base_pt = 12
+            scaled_pt = int(round(9 * scale))
+            font.setPointSize(int(max(base_pt, scaled_pt)))
+            p.setFont(font)
 
-        fm = QtGui.QFontMetrics(font)
-        rect = fm.boundingRect(text)
-        rect = QtCore.QRectF(margin, margin, rect.width() + 8 * scale, rect.height() + 4 * scale)
+            fm = QtGui.QFontMetrics(font)
+            rect = fm.boundingRect(text)
+            rect = QtCore.QRectF(margin, margin, rect.width() + 8 * scale, rect.height() + 4 * scale)
 
-        bg = QtGui.QColor(0, 0, 0, 128)
-        p.fillRect(rect, bg)
+            bg = QtGui.QColor(0, 0, 0, 128)
+            p.fillRect(rect, bg)
 
-        p.drawText(
-            rect.adjusted(4 * scale, 0, -4 * scale, 0),
-            QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter,
-            text,
-        )
+            p.drawText(
+                rect.adjusted(4 * scale, 0, -4 * scale, 0),
+                QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter,
+                text,
+            )
+        finally:
+            p.restore()
 
     def _draw_stats_line(
         self, p: QtGui.QPainter, fps: float, stats: YoloStats, width: int, height: int
     ) -> None:
-        scale = float(getattr(self, "_overlay_scale", 1.0) or 1.0)
-        margin = int(6 * scale)
-        text = (
-            f"FPS: {fps:4.1f} | "
-            f"faces: {stats.faces} ({stats.known_faces} known) | "
-            f"pets: {stats.pets} | total: {stats.total}"
-        )
+        p.save()
+        try:
+            scale = float(getattr(self, "_overlay_scale", 1.0) or 1.0)
+            margin = int(6 * scale)
+            text = (
+                f"FPS: {fps:4.1f} | "
+                f"faces: {stats.faces} ({stats.known_faces} known) | "
+                f"pets: {stats.pets} | total: {stats.total}"
+            )
 
-        font = p.font()
-        base_pt = font.pointSize() if font.pointSize() > 0 else 9
-        font.setPointSize(int(max(base_pt, 9 * scale)))
-        fm = QtGui.QFontMetrics(font)
-        text_width = fm.horizontalAdvance(text)
-        text_height = fm.height()
+            font = QtGui.QFont(p.font())
+            base_pt = 12
+            scaled_pt = int(round(9 * scale))
+            font.setPointSize(int(max(base_pt, scaled_pt)))
+            p.setFont(font)
 
-        x = margin
-        y = height - margin
-        rect = QtCore.QRectF(x - 4 * scale, y - text_height - 2 * scale, text_width + 8 * scale, text_height + 4 * scale)
+            fm = QtGui.QFontMetrics(font)
+            text_width = fm.horizontalAdvance(text)
+            text_height = fm.height()
 
-        bg = QtGui.QColor(0, 0, 0, 128)
-        p.fillRect(rect, bg)
-        p.setPen(QtGui.QColor(255, 255, 255))
-        p.drawText(
-            rect.adjusted(4 * scale, 0, -4 * scale, 0),
-            QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter,
-            text,
-        )
+            x = margin
+            y = height - margin
+            rect = QtCore.QRectF(x - 4 * scale, y - text_height - 2 * scale, text_width + 8 * scale, text_height + 4 * scale)
+
+            bg = QtGui.QColor(0, 0, 0, 128)
+            p.fillRect(rect, bg)
+            p.setPen(QtGui.QColor(255, 255, 255))
+            p.drawText(
+                rect.adjusted(4 * scale, 0, -4 * scale, 0),
+                QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter,
+                text,
+            )
+        finally:
+            p.restore()
 
     def _draw_rec_indicator(self, p: QtGui.QPainter, w: int, h: int) -> None:
-        scale = float(getattr(self, "_overlay_scale", 1.0) or 1.0)
-        margin = int(10 * scale)
-        box_w, box_h = int(76 * scale), int(26 * scale)
-        rect = QtCore.QRectF(w - box_w - margin, margin, box_w, box_h)
-        bg = QtGui.QColor(180, 0, 0, 180)
-        p.fillRect(rect, bg)
+        p.save()
+        try:
+            scale = float(getattr(self, "_overlay_scale", 1.0) or 1.0)
+            margin = int(10 * scale)
+            box_w, box_h = int(76 * scale), int(26 * scale)
+            rect = QtCore.QRectF(w - box_w - margin, margin, box_w, box_h)
+            bg = QtGui.QColor(180, 0, 0, 180)
+            p.fillRect(rect, bg)
 
-        dot_r = int(6 * scale)
-        dot_center = QtCore.QPointF(rect.left() + 12 * scale, rect.center().y())
-        p.setBrush(QtGui.QBrush(QtGui.QColor(255, 80, 80)))
-        p.setPen(QtCore.Qt.PenStyle.NoPen)
-        p.drawEllipse(dot_center, dot_r, dot_r)
+            dot_r = int(6 * scale)
+            dot_center = QtCore.QPointF(rect.left() + 12 * scale, rect.center().y())
+            p.setBrush(QtGui.QBrush(QtGui.QColor(255, 80, 80)))
+            p.setPen(QtCore.Qt.PenStyle.NoPen)
+            p.drawEllipse(dot_center, dot_r, dot_r)
 
-        p.setPen(QtGui.QPen(QtGui.QColor(255, 230, 230)))
-        font = p.font()
-        base_pt = font.pointSize() if font.pointSize() > 0 else 9
-        font.setPointSize(int(max(base_pt, 9 * scale)))
-        font.setBold(True)
-        p.setFont(font)
-        p.drawText(
-            rect.adjusted(24 * scale, 0, -6 * scale, 0),
-            QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter,
-            "REC",
-        )
+            p.setPen(QtGui.QPen(QtGui.QColor(255, 230, 230)))
+            font = QtGui.QFont(p.font())
+            base_pt = 12
+            scaled_pt = int(round(9 * scale))
+            font.setPointSize(int(max(base_pt, scaled_pt)))
+            font.setBold(True)
+            p.setFont(font)
+            p.drawText(
+                rect.adjusted(24 * scale, 0, -6 * scale, 0),
+                QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter,
+                "REC",
+            )
+        finally:
+            p.restore()
 
     cls._overlay_toggles_key = _overlay_toggles_key
     cls._ensure_overlay_cache = _ensure_overlay_cache

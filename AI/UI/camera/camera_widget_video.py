@@ -404,13 +404,10 @@ def attach_video_handlers(cls) -> None:
         self._last_bgr = None
         self._last_pkt = None
         self._overlay_cache_dirty = True
-        # Reset overlay scale so the new stream can pick an appropriate size once.
-        self._overlay_scale = None
-        self._overlay_scale_locked = False
         self._capture.start()
         if hasattr(self, "_frame_timer"):
             self._frame_timer.start()
-        # recompute overlay cache scale after swap
+        # recompute overlay cache after swap
         self._overlay_cache_pixmap = None
 
     cls._motion_settings = _motion_settings

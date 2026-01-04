@@ -32,28 +32,43 @@ def _brush(rgb: Tuple[int, int, int], alpha: int = 80) -> QtGui.QBrush:
 def _draw_box(p: QtGui.QPainter, xyxy, rgb, *, scale: float):
     x1, y1, x2, y2 = xyxy
     r = QtCore.QRectF(x1, y1, x2 - x1, y2 - y1)
-    p.setPen(_pen(max(1, int(round(2 * scale))), rgb))
-    p.setBrush(QtCore.Qt.BrushStyle.NoBrush)
-    p.drawRect(r)
+    p.save()
+    try:
+        p.setPen(_pen(max(1, int(round(2 * scale))), rgb))
+        p.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+        p.drawRect(r)
+    finally:
+        p.restore()
 
 
 def _draw_label(p: QtGui.QPainter, xyxy, text: str, rgb, *, scale: float):
     x1, y1, x2, y2 = xyxy
-    font = p.font()
-    base_pt = font.pointSize() if font.pointSize() > 0 else 10
-    font.setPointSize(int(max(8, round(base_pt * scale))))
-    p.setFont(font)
-    fm = QtGui.QFontMetrics(p.font())
-    tw = fm.horizontalAdvance(text) + int(6 * scale)
-    th = fm.height() + int(4 * scale)
-    r = QtCore.QRectF(x1, max(0, y1 - th), tw, th)
+    # IMPORTANT: Use a stable baseline font size per call; avoid compounding font scaling
+    # when multiple labels are drawn in a single frame.
+    p.save()
+    try:
+        font = p.font()
+        base_pt = 10
+        font.setPointSize(int(max(8, round(base_pt * scale))))
+        p.setFont(font)
 
-    p.setPen(QtCore.Qt.PenStyle.NoPen)
-    p.setBrush(_brush(rgb, 200))
-    p.drawRect(r)
+        fm = QtGui.QFontMetrics(p.font())
+        tw = fm.horizontalAdvance(text) + int(6 * scale)
+        th = fm.height() + int(4 * scale)
+        r = QtCore.QRectF(x1, max(0, y1 - th), tw, th)
 
-    p.setPen(_pen(max(1, int(round(1 * scale))), (0, 0, 0)))
-    p.drawText(r, QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter, text)
+        p.setPen(QtCore.Qt.PenStyle.NoPen)
+        p.setBrush(_brush(rgb, 200))
+        p.drawRect(r)
+
+        p.setPen(_pen(max(1, int(round(1 * scale))), (0, 0, 0)))
+        p.drawText(
+            r,
+            QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter,
+            text,
+        )
+    finally:
+        p.restore()
 
 
 def _yolo_color(cls: str) -> Tuple[int, int, int]:

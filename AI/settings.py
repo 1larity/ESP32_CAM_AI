@@ -36,6 +36,7 @@ class CameraSettings:
     ai_yolo: Optional[bool] = None
     ai_faces: Optional[bool] = None
     ai_pets: Optional[bool] = None
+    overlay_scale: Optional[float] = None  # text/box scale computed on first frame
     # Per-camera orientation
     rotation_deg: int = 0           # 0, 90, 180, 270
     flip_horizontal: bool = False
@@ -125,6 +126,7 @@ def load_settings() -> AppSettings:
                     ai_yolo=c.get("ai_yolo"),
                     ai_faces=c.get("ai_faces"),
                     ai_pets=c.get("ai_pets"),
+                    overlay_scale=c.get("overlay_scale"),
                     rotation_deg=int(c.get("rotation_deg", 0) or 0),
                     flip_horizontal=bool(c.get("flip_horizontal", False)),
                     flip_vertical=bool(c.get("flip_vertical", False)),

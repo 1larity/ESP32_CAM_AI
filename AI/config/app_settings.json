@@ -26,7 +26,7 @@
       678,
       0
     ],
-    "192.168.1.78": [
+    "Cam-3": [
       0,
       0,
       1137,
@@ -56,7 +56,7 @@
   "mqtt_base_topic": "esp32_cam_ai",
   "mqtt_discovery_prefix": "homeassistant",
   "mqtt_user": "homeassistant",
-  "mqtt_password_enc": "nq8QJOBjz0Lbsp0B+Ix314UkaTiTfXwTQ3FR0IIxA9S+hw8w4YyhcLK0GaiLn8x1WNSRtYo=",
+  "mqtt_password_enc": "fh98FzU0TikpVUNOe8q4iqB5B0PHc7KJGgEhPgXJMmfA8586qOFIkw6SvR1wxFLatD++LJo=",
   "cameras": [
     {
       "name": "Cam-2",
@@ -71,10 +71,11 @@
       "ai_yolo": true,
       "ai_faces": true,
       "ai_pets": true,
+      "overlay_scale": 1.25,
       "rotation_deg": 0,
       "flip_horizontal": false,
       "flip_vertical": false,
-      "password_enc": "GapT39TxrL5juKp+jFratniumpUUlkGzz7qou/Ke3AgWY7Md5CJsbXd5+oUvkDexG9q524c="
+      "password_enc": "ikG9Dw/brSeAJQZ05EbdKOANn/eZiYVaT613I2RWIR/GZ0XNc1v+7QLlT+fSCw0JflYnwi4="
     },
     {
       "name": "Cam-1",
@@ -89,13 +90,14 @@
       "ai_yolo": true,
       "ai_faces": true,
       "ai_pets": true,
+      "overlay_scale": 1.25,
       "rotation_deg": 0,
       "flip_horizontal": false,
       "flip_vertical": false,
-      "password_enc": "gvxQXc1xMF81qIWHUo1KVcNyScrpA+6DewqRRaYSXXeGTnmDJP7L0A4rwwDQ0obl0flJK4s="
+      "password_enc": "VXiogRjF3ZhVncA3u4+FsaqcPP9+tBJoocDO34TtFMNi42Tcm+j3IRqiiXiblWWeM1euKhM="
     },
     {
-      "name": "192.168.1.78",
+      "name": "Cam-3",
       "stream_url": "rtsp://192.168.1.78:8554/Streaming/Channels/101",
       "user": "admin",
       "token": null,
@@ -113,10 +115,11 @@
       "ai_yolo": true,
       "ai_faces": true,
       "ai_pets": true,
+      "overlay_scale": 2.7,
       "rotation_deg": 0,
       "flip_horizontal": false,
       "flip_vertical": true,
-      "password_enc": "R6FFpq7453GyYZg/1q6FAD8bhqUSaJIXXDP0tkWkZjrQ4WSeaX30yNuSJ5x929F0Njb0wA=="
+      "password_enc": "tPtdcRTYnXr+NZ5m/1gdgxll3ONTVfkrW1szLtOvftyXiKFupg/WWAr7OGU7HkZhrxxQJw=="
     }
   ]
 }
