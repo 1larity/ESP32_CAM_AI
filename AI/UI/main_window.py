@@ -1,11 +1,6 @@
 from __future__ import annotations
-from typing import Optional
 from PySide6 import QtCore, QtGui, QtWidgets
-from PySide6.QtCore import Signal, Slot
-from settings import AppSettings, CameraSettings, save_settings, BASE_DIR
-import shutil
-import datetime
-from utils import open_folder_or_warn
+from settings import AppSettings, CameraSettings, save_settings
 from models import ModelManager
 from enrollment import EnrollmentService
 from UI.enrollment import EnrollDialog
@@ -15,26 +10,13 @@ from UI.discovery_dialog import DiscoveryDialog
 from UI.ip_cam_dialog import AddIpCameraDialog
 from UI.onvif_dialog import OnvifDiscoveryDialog
 from UI.camera import CameraWidget
-from UI.face_tuner import FaceRecTunerDialog
 from UI.mqtt_settings import MqttSettingsDialog
 from UI.unknown_capture_dialog import UnknownCaptureDialog
-from enrollment import get_enrollment_service
 from ha_discovery import publish_discovery
 
-
-class _FaceRebuildWorker(QtCore.QObject):
-    """
-    Runs the LBPH model rebuild in a background thread.
-    """
-
-    finished = Signal(bool)
-
-    @Slot()
-    def run(self) -> None:
-        svc = get_enrollment_service()
-        ok = svc.rebuild_lbph_model_from_disk()
-        self.finished.emit(ok)
-
+from UI.face_rebuild import FaceRebuildController
+from UI.main_window_menus import build_menus
+from UI.person_tools import archive_person_folder, purge_auto_unknowns, restore_person_folder
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, app_cfg: AppSettings, *, load_on_init: bool = True, mqtt_service=None):
@@ -43,9 +25,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._mqtt = mqtt_service
 
         # Background face rebuild state
-        self._face_rebuild_thread: Optional[QtCore.QThread] = None
-        self._face_rebuild_worker: Optional[_FaceRebuildWorker] = None
-        self._face_rebuild_dialog: Optional[QtWidgets.QProgressDialog] = None
+        self._face_rebuild = FaceRebuildController(self)
 
         # MDI area
         self.mdi = QtWidgets.QMdiArea()
@@ -377,160 +357,14 @@ class MainWindow(QtWidgets.QMainWindow):
     # ------------------------------------------------------------------ #
 
     def _build_menus(self) -> None:
-        menubar = self.menuBar()
-
-        # File
-        m_file = menubar.addMenu("File")
-        act_add_ip = m_file.addAction("Add Camera by IP…")
-        act_add_ip.triggered.connect(self._add_camera_ip_dialog)
-        act_add_url = m_file.addAction("Add Camera by URL…")
-        act_add_url.triggered.connect(self._add_camera_url_dialog)
-        m_file.addSeparator()
-        act_save = m_file.addAction("Save Settings")
-        act_save.triggered.connect(lambda: save_settings(self.app_cfg))
-        m_file.addSeparator()
-        act_exit = m_file.addAction("Exit")
-        act_exit.triggered.connect(self.close)
-
-        # Cameras
-        m_cams = menubar.addMenu("Cameras")
-        m_cams.addAction("Add Camera by IP…").triggered.connect(
-            self._add_camera_ip_dialog
-        )
-        m_cams.addAction("Add Camera by URL…").triggered.connect(
-            self._add_camera_url_dialog
-        )
-        m_cams.addAction("Remove Camera…").triggered.connect(
-            self._remove_camera_dialog
-        )
-        m_cams.addAction("Rename Camera…").triggered.connect(
-            self._rename_camera_dialog
-        )
-        m_cams.addSeparator()
-        m_cams.addAction("Discover ESP32-CAMs…").triggered.connect(
-            self._open_discovery
-        )
-        m_cams.addAction("Discover ONVIF Cameras…").triggered.connect(
-            self._open_onvif_discovery
-        )
-
-        # Tools
-        m_tools = menubar.addMenu("Tools")
-        # Per request, removed: Open config/data/models folder
-        m_tools.addAction("Open recordings folder").triggered.connect(
-            lambda: open_folder_or_warn(self, self.app_cfg.output_dir)
-        )
-        m_tools.addAction("Open logs folder").triggered.connect(
-            lambda: open_folder_or_warn(self, self.app_cfg.logs_dir)
-        )
-        m_tools.addAction("Purge auto-trained unknowns").triggered.connect(
-            self._purge_auto_unknowns
-        )
-        m_tools.addSeparator()
-        m_tools.addAction("MQTT Settings").triggered.connect(
-            self._open_mqtt_settings
-        )
-        m_tools.addSeparator()
-        m_tools.addAction("Enroll faces / pets…").triggered.connect(
-            self._open_enrollment
-        )
-        m_tools.addAction("Image manager…").triggered.connect(
-            self._open_image_manager
-        )
-        m_tools.addAction("Face recognizer tuner").triggered.connect(
-            lambda: FaceRecTunerDialog(str(self.app_cfg.models_dir), self).exec()
-        )
-        # Unknown capture / auto-train dialog
-        m_tools.addAction("Unknown capture & auto-train…").triggered.connect(
-            self._open_unknown_capture_dialog
-        )
-
-        # LBPH toggle (ignore enrollment models)
-        act_ignore = QtGui.QAction("Ignore enrollment models (disable LBPH)", self)
-        act_ignore.setCheckable(True)
-        act_ignore.setChecked(bool(getattr(self.app_cfg, "ignore_enrollment_models", False)))
-        act_ignore.toggled.connect(self._on_ignore_enroll_toggled)
-        m_tools.addAction(act_ignore)
-
-        act_gpu = QtGui.QAction("Use GPU for YOLO (requires CUDA build)", self)
-        act_gpu.setCheckable(True)
-        act_gpu.setChecked(bool(getattr(self.app_cfg, "use_gpu", False)))
-        act_gpu.toggled.connect(self._on_use_gpu_toggled)
-        m_tools.addAction(act_gpu)
-
-        act_archive = QtGui.QAction("Archive person/pet and rebuild", self)
-        act_archive.triggered.connect(self._archive_person_folder)
-        m_tools.addAction(act_archive)
-
-        act_restore = QtGui.QAction("Restore person/pet from archive and rebuild", self)
-        act_restore.triggered.connect(self._restore_person_folder)
-        m_tools.addAction(act_restore)
-
-        act_rebuild_faces = QtGui.QAction("Rebuild face model from disk", self)
-        act_rebuild_faces.triggered.connect(
-            lambda: self._start_face_rebuild("Rebuild Face Model")
-        )
-        m_tools.addAction(act_rebuild_faces)
-
-        # View
-        m_view = menubar.addMenu("View")
-        act_events = m_view.addAction("Events pane")
-        act_events.triggered.connect(self._toggle_events_pane)
-        m_view.addSeparator()
-        m_view.addAction("Tile Subwindows").triggered.connect(
-            self.mdi.tileSubWindows
-        )
-        m_view.addAction("Cascade Subwindows").triggered.connect(
-            self.mdi.cascadeSubWindows
-        )
-        m_view.addSeparator()
-        m_view.addAction("Fit All to Window").triggered.connect(self._fit_all)
-        m_view.addAction("100% All").triggered.connect(self._100_all)
-        m_view.addAction("Resize windows to video size").triggered.connect(
-            self._resize_all_to_video
-        )
+        build_menus(self)
 
     # ------------------------------------------------------------------ #
     # face model rebuild with progress
     # ------------------------------------------------------------------ #
 
     def _start_face_rebuild(self, title: str) -> None:
-        """
-        Start a background LBPH face model rebuild and show a modal
-        progress dialog so the user can see that work is happening.
-        """
-        # Avoid re-entrancy; if a rebuild is already in progress, ignore.
-        if self._face_rebuild_thread is not None:
-            return
-
-        # Progress dialog (indeterminate)
-        dlg = QtWidgets.QProgressDialog(
-            "Rebuilding face model from disk…", "", 0, 0, self
-        )
-        dlg.setWindowTitle(title)
-        dlg.setWindowModality(QtCore.Qt.WindowModality.ApplicationModal)
-        dlg.setCancelButton(None)
-        dlg.setMinimumDuration(0)
-        dlg.setAutoClose(False)
-        dlg.setAutoReset(False)
-        dlg.show()
-
-        self._face_rebuild_dialog = dlg
-
-        # Background thread + worker
-        thread = QtCore.QThread(self)
-        worker = _FaceRebuildWorker()
-        worker.moveToThread(thread)
-
-        worker.finished.connect(self._on_face_rebuild_finished)
-        worker.finished.connect(thread.quit)
-        thread.finished.connect(thread.deleteLater)
-        thread.started.connect(worker.run)
-
-        self._face_rebuild_thread = thread
-        self._face_rebuild_worker = worker
-
-        thread.start()
+        self._face_rebuild.start(title)
 
     # Toggle handlers
     def _on_unknown_faces_toggled(self, checked: bool) -> None:
@@ -573,174 +407,11 @@ class MainWindow(QtWidgets.QMainWindow):
             "Setting will take effect on next detector restart. Restart the app to switch backend.",
         )
 
-    @Slot(bool)
-    def _on_face_rebuild_finished(self, ok: bool) -> None:
-        """
-        Invoked in the GUI thread when the background rebuild finishes.
-        """
-        # Close the progress dialog
-        if self._face_rebuild_dialog is not None:
-            self._face_rebuild_dialog.close()
-            self._face_rebuild_dialog = None
-
-        # Clean up worker/thread handles
-        self._face_rebuild_worker = None
-        self._face_rebuild_thread = None
-
-        # Inform the user of the result
-        if ok:
-            QtWidgets.QMessageBox.information(
-                self,
-                "Rebuild Face Model",
-                "LBPH model rebuilt from disk samples.",
-            )
-        else:
-            QtWidgets.QMessageBox.information(
-                self,
-                "Rebuild Face Model",
-                "No face samples found to rebuild.",
-            )
-
     def _archive_person_folder(self) -> None:
-        """
-        Move a named person/pet folder out of data/faces into an archive,
-        then rebuild LBPH without that data.
-        """
-        name, ok = QtWidgets.QInputDialog.getText(
-            self,
-            "Archive person/pet",
-            "Folder name under data/faces to archive:",
-        )
-        if not ok:
-            return
-        name = name.strip()
-        if not name:
-            return
-
-        src = BASE_DIR / "data" / "faces" / name
-        if not src.exists() or not src.is_dir():
-            QtWidgets.QMessageBox.warning(
-                self,
-                "Archive person/pet",
-                f"Folder not found: {src}",
-            )
-            return
-
-        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        dest_dir = BASE_DIR / "data" / "archive" / "faces"
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        dest = dest_dir / f"{name}_{ts}"
-        try:
-            shutil.move(str(src), str(dest))
-        except Exception as e:
-            QtWidgets.QMessageBox.warning(
-                self,
-                "Archive person/pet",
-                f"Failed to archive {name}:\n{e}",
-            )
-            return
-
-        QtWidgets.QMessageBox.information(
-            self,
-            "Archive person/pet",
-            f"Archived {name} to:\n{dest}\n\nRebuilding face model without this data...",
-        )
-
-        self._start_face_rebuild(f"Rebuilding face model without {name}")
+        archive_person_folder(self, self._start_face_rebuild)
 
     def _restore_person_folder(self) -> None:
-        """
-        Restore a previously archived person/pet folder back into data/faces and rebuild.
-        """
-        archive_root = BASE_DIR / "data" / "archive" / "faces"
-        if not archive_root.exists():
-            QtWidgets.QMessageBox.warning(
-                self,
-                "Restore person/pet",
-                f"No archive folder found at:\n{archive_root}",
-            )
-            return
-
-        # List available archives
-        archives = sorted([p.name for p in archive_root.iterdir() if p.is_dir()])
-        if not archives:
-            QtWidgets.QMessageBox.information(
-                self,
-                "Restore person/pet",
-                "No archived folders found.",
-            )
-            return
-
-        name, ok = QtWidgets.QInputDialog.getItem(
-            self,
-            "Restore person/pet",
-            "Select archive to restore:",
-            archives,
-            editable=False,
-        )
-        if not ok or not name:
-            return
-
-        src = archive_root / name
-        target_name = name.split("_")[0] if "_" in name else name
-        dest = BASE_DIR / "data" / "faces" / target_name
-
-        if dest.exists():
-            QtWidgets.QMessageBox.warning(
-                self,
-                "Restore person/pet",
-                f"Destination already exists:\n{dest}\nRemove/rename it first.",
-            )
-            return
-
-        try:
-            shutil.move(str(src), str(dest))
-        except Exception as e:
-            QtWidgets.QMessageBox.warning(
-                self,
-                "Restore person/pet",
-                f"Failed to restore {name}:\n{e}",
-            )
-            return
-
-        QtWidgets.QMessageBox.information(
-            self,
-            "Restore person/pet",
-            f"Restored to:\n{dest}\n\nRebuilding face model...",
-        )
-        self._start_face_rebuild(f"Rebuilding face model with {target_name}")
+        restore_person_folder(self, self._start_face_rebuild)
 
     def _purge_auto_unknowns(self) -> None:
-        """
-        Remove auto-trained unknowns (auto_person_*/auto_pet_*) and rebuild LBPH.
-        """
-        face_root = BASE_DIR / "data" / "faces"
-        pet_root = BASE_DIR / "data" / "pets"
-        removed = []
-        for child in face_root.iterdir():
-            if not child.is_dir():
-                continue
-            name = child.name
-            if name.startswith("auto_person_") or name.startswith("auto_pet_"):
-                try:
-                    shutil.rmtree(child)
-                    removed.append(name)
-                except Exception:
-                    continue
-        # Auto-trained pets belong under data/pets; also remove them there.
-        try:
-            for child in pet_root.iterdir():
-                if not child.is_dir():
-                    continue
-                name = child.name
-                if name.startswith("auto_pet_"):
-                    try:
-                        shutil.rmtree(child)
-                        removed.append(name)
-                    except Exception:
-                        continue
-        except Exception:
-            pass
-        msg = "No auto-trained folders found." if not removed else f"Removed: {', '.join(removed)}"
-        QtWidgets.QMessageBox.information(self, "Purge auto-trained unknowns", f"{msg}\nRebuilding face model...")
-        self._start_face_rebuild("Rebuilding face model without auto-trained unknowns")
+        purge_auto_unknowns(self, self._start_face_rebuild)
