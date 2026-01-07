@@ -49,6 +49,9 @@ class MqttService:
         self.connected = False
         self._lock = threading.RLock()
         self._on_connect_cbs: List[Callable[["MqttService"], None]] = []
+        # De-spam: avoid publishing identical retained payloads repeatedly.
+        # Keyed by (full_topic, retain, qos) to preserve semantics.
+        self._last_published: dict[tuple[str, bool, int], bytes] = {}
         self._base_topic = _clean_topic(getattr(cfg, "mqtt_base_topic", None), "esp32_cam_ai")
         self._avail_topic = f"{self._base_topic}/status"
 
@@ -137,7 +140,16 @@ class MqttService:
                 return
             try:
                 full = f"{self._base_topic}/{topic.lstrip('/')}"
+                payload_bytes = (
+                    bytes(payload)
+                    if isinstance(payload, (bytes, bytearray))
+                    else str(payload).encode("utf-8")
+                )
+                key = (full, bool(retain), int(qos))
+                if self._last_published.get(key) == payload_bytes:
+                    return
                 self.client.publish(full, payload=payload, qos=int(qos), retain=retain)
+                self._last_published[key] = payload_bytes
             except Exception as e:
                 print(f"[MQTT] publish error on {topic}: {e}")
 
@@ -151,6 +163,9 @@ class MqttService:
 
     def _on_connect(self, client, userdata, flags, rc):  # type: ignore[override]
         self.connected = True
+        # Allow first publish after reconnect to flow (broker may have restarted).
+        with self._lock:
+            self._last_published.clear()
         try:
             client.publish(self._avail_topic, payload="online", retain=True)
         except Exception:
@@ -164,4 +179,6 @@ class MqttService:
 
     def _on_disconnect(self, client, userdata, rc):  # type: ignore[override]
         self.connected = False
+        with self._lock:
+            self._last_published.clear()
         print(f"[MQTT] disconnected (rc={rc})")
