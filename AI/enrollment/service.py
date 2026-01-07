@@ -12,8 +12,10 @@ from PySide6 import QtCore
 from PySide6.QtCore import Signal
 
 from settings import BASE_DIR
-from detection.lbph import train_lbph_models
 from .capture import capture_enrollment_sample
+from .unknown_capture import count_unknown, maybe_save_unknowns
+from .auto_unknowns import bootstrap_auto_unknowns, promote_unknown
+from .training import train_from_disk
 
 
 class EnrollmentService(QtCore.QObject):
@@ -244,130 +246,16 @@ class EnrollmentService(QtCore.QObject):
     # ------------------------------------------------------------------ unknown capture
 
     def _maybe_save_unknowns(self, cam_name: str, bgr: np.ndarray, pkt, now_ms: int) -> None:
-        """Persist unknown faces/pets into queue folders for later training."""
-        if self.collect_unknown_faces:
-            for face in getattr(pkt, "faces", []) or []:
-                label = (face.cls or "").lower()
-                if label in ("", "face", "unknown", "person"):
-                    last = self._last_unknown_face.get(cam_name, 0)
-                    if now_ms - last < 800:
-                        continue
-                    # enforce per-cam limit
-                    if self._count_unknown(self.unknown_face_dir / cam_name) >= self.unknown_capture_limit:
-                        continue
-                    self._last_unknown_face[cam_name] = now_ms
-                    try:
-                        x1, y1, x2, y2 = map(int, face.xyxy)
-                        roi = bgr[max(0, y1):max(0, y2), max(0, x1):max(0, x2)]
-                        if roi.size == 0:
-                            continue
-                        out_dir = self.unknown_face_dir / cam_name
-                        out_dir.mkdir(parents=True, exist_ok=True)
-                        fname = f"{cam_name}_{now_ms}.jpg"
-                        from cv2 import imwrite
-                        imwrite(str(out_dir / fname), roi)
-                        if self.auto_train_unknowns:
-                            self._promote_unknown(roi, cam_name, is_pet=False)
-                    except Exception:
-                        continue
-
-        if self.collect_unknown_pets:
-            for pet in getattr(pkt, "pets", []) or []:
-                last = self._last_unknown_pet.get(cam_name, 0)
-                if now_ms - last < 800:
-                    continue
-                if self._count_unknown(self.unknown_pet_dir / cam_name) >= self.unknown_capture_limit:
-                    continue
-                self._last_unknown_pet[cam_name] = now_ms
-                try:
-                    x1, y1, x2, y2 = map(int, pet.xyxy)
-                    roi = bgr[max(0, y1):max(0, y2), max(0, x1):max(0, x2)]
-                    if roi.size == 0:
-                        continue
-                    out_dir = self.unknown_pet_dir / cam_name
-                    out_dir.mkdir(parents=True, exist_ok=True)
-                    fname = f"{cam_name}_{now_ms}_{pet.cls}.jpg"
-                    from cv2 import imwrite
-                    imwrite(str(out_dir / fname), roi)
-                    if self.auto_train_unknowns:
-                        self._promote_unknown(roi, cam_name, is_pet=True)
-                except Exception:
-                    continue
+        maybe_save_unknowns(self, cam_name, bgr, pkt, now_ms)
 
     def _count_unknown(self, path: Path) -> int:
-        if not path.exists():
-            return 0
-        return len(list(path.glob("*.jpg")))
+        return count_unknown(path)
 
     def _promote_unknown(self, roi, cam_name: str, is_pet: bool) -> None:
-        """
-        Save unknown into auto_* folder for provisional training and kick rebuild.
-        """
-        try:
-            from cv2 import imwrite
-            label_prefix = "auto_pet" if is_pet else "auto_person"
-            base_dir = self.pet_dir if is_pet else self.face_dir
-            out_dir = base_dir / f"{label_prefix}_{cam_name}"
-            out_dir.mkdir(parents=True, exist_ok=True)
-            fname = f"{label_prefix}_{self._auto_label_idx:05d}.jpg"
-            self._auto_label_idx += 1
-            imwrite(str(out_dir / fname), roi)
-            # Kick rebuild asynchronously (faces only); pets are stored for the Pets manager.
-            if not is_pet:
-                QtCore.QTimer.singleShot(0, self._train_now)
-        except Exception:
-            pass
+        promote_unknown(self, roi, cam_name, is_pet=is_pet, train_now=self._train_now)
 
     def _bootstrap_auto_unknowns(self) -> None:
-        """
-        If auto-train is enabled, seed auto_person/auto_pet folders from any existing
-        unknown capture queues so recognition can start without waiting for new saves.
-        """
-        try:
-            import cv2
-        except Exception:
-            return
-
-        promoted = False
-
-        # Faces
-        for cam_dir in self.unknown_face_dir.glob("*"):
-            if not cam_dir.is_dir():
-                continue
-            dest = self.face_dir / f"auto_person_{cam_dir.name}"
-            if dest.exists() and any(dest.glob("*.jpg")):
-                continue
-            files = sorted(cam_dir.glob("*.jpg"))
-            dest.mkdir(parents=True, exist_ok=True)
-            for f in files[: min(20, len(files))]:
-                img = cv2.imread(str(f), cv2.IMREAD_COLOR)
-                if img is None:
-                    continue
-                fname = f"{dest.name}_{self._auto_label_idx:05d}.jpg"
-                self._auto_label_idx += 1
-                cv2.imwrite(str(dest / fname), img)
-                promoted = True
-
-        # Pets
-        for cam_dir in self.unknown_pet_dir.glob("*"):
-            if not cam_dir.is_dir():
-                continue
-            dest = self.pet_dir / f"auto_pet_{cam_dir.name}"
-            if dest.exists() and any(dest.glob("*.jpg")):
-                continue
-            files = sorted(cam_dir.glob("*.jpg"))
-            dest.mkdir(parents=True, exist_ok=True)
-            for f in files[: min(20, len(files))]:
-                img = cv2.imread(str(f), cv2.IMREAD_COLOR)
-                if img is None:
-                    continue
-                fname = f"{dest.name}_{self._auto_label_idx:05d}.jpg"
-                self._auto_label_idx += 1
-                cv2.imwrite(str(dest / fname), img)
-                promoted = True
-
-        if promoted:
-            QtCore.QTimer.singleShot(0, self._train_now)
+        bootstrap_auto_unknowns(self, train_now=self._train_now)
 
     # ------------------------------------------------------------------ training
 
@@ -378,7 +266,7 @@ class EnrollmentService(QtCore.QObject):
         This is used both after enrollment completes and when the user
         requests a manual "rebuild from disk" via the controller.
         """
-        ok = train_lbph_models(str(self.face_dir), str(self.models_dir))
+        ok = train_from_disk(self.face_dir, self.models_dir)
         if not ok:
             self._emit_status(last_error="No faces found on disk for training.")
         else:

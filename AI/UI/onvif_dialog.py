@@ -1,23 +1,19 @@
 from __future__ import annotations
 
 import threading
-from typing import Dict, Optional
+from typing import Optional
 
 from PySide6 import QtCore, QtWidgets
 
-from onvif import (
-    discover_onvif,
-    OnvifDiscoveryResult,
-    OnvifClient,
-    OnvifAuthError,
-    OnvifError,
-    try_onvif_zeep_stream,
-)
+from onvif import discover_onvif, OnvifDiscoveryResult
+from onvif.enrichment import enrich_onvif_device
+from onvif.rtsp import guess_fallback_urls, inject_auth
 from settings import CameraSettings
+from UI.onvif_dialog_ui import build_onvif_discovery_dialog_ui
 
 
 class OnvifDiscoveryDialog(QtWidgets.QDialog):
-    addItemSignal = QtCore.Signal(object)      # info dict
+    addItemSignal = QtCore.Signal(object)  # info dict
     statusSignal = QtCore.Signal(str)
     finishedSignal = QtCore.Signal()
     applyItemSignal = QtCore.Signal(object, object)
@@ -25,42 +21,19 @@ class OnvifDiscoveryDialog(QtWidgets.QDialog):
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Discover ONVIF Cameras")
 
-        self.btn_scan = QtWidgets.QPushButton("Scan")
-        self.btn_stop = QtWidgets.QPushButton("Stop")
-        self.btn_stop.setEnabled(False)
-        self.btn_fetch_auth = QtWidgets.QPushButton("Fetch with credentials…")
-        self.btn_fetch_auth.setEnabled(False)
-        self.btn_add = QtWidgets.QPushButton("Add Selected")
-        self.btn_add.setEnabled(False)
+        ui = build_onvif_discovery_dialog_ui(self)
+        self.btn_scan = ui.btn_scan
+        self.btn_stop = ui.btn_stop
+        self.btn_fetch_auth = ui.btn_fetch_auth
+        self.btn_add = ui.btn_add
+        self.list = ui.list
+        self.lbl_status = ui.lbl_status
+        self.progress = ui.progress
+        self.details = ui.details
 
-        self.list = QtWidgets.QListWidget()
         self.list.itemSelectionChanged.connect(self._on_selection)
         self.list.itemDoubleClicked.connect(self._on_add_selected)
-
-        self.lbl_status = QtWidgets.QLabel("Idle")
-        self.progress = QtWidgets.QProgressBar()
-        self.progress.setMaximum(0)
-        self.progress.setValue(0)
-        self.details = QtWidgets.QPlainTextEdit()
-        self.details.setReadOnly(True)
-        self.details.setMaximumBlockCount(500)
-
-        btns = QtWidgets.QHBoxLayout()
-        btns.addWidget(self.btn_scan)
-        btns.addWidget(self.btn_stop)
-        btns.addWidget(self.btn_fetch_auth)
-        btns.addWidget(self.btn_add)
-
-        lay = QtWidgets.QVBoxLayout(self)
-        lay.addWidget(QtWidgets.QLabel("WS-Discovery will broadcast on the local network and query camera capabilities."))
-        lay.addLayout(btns)
-        lay.addWidget(self.lbl_status)
-        lay.addWidget(self.progress)
-        lay.addWidget(self.list)
-        lay.addWidget(QtWidgets.QLabel("Camera details"))
-        lay.addWidget(self.details)
 
         self.btn_scan.clicked.connect(self._start_scan)
         self.btn_stop.clicked.connect(self._stop_scan)
@@ -98,7 +71,7 @@ class OnvifDiscoveryDialog(QtWidgets.QDialog):
                 for res in hits:
                     if self._stop_evt.is_set():
                         break
-                    info = self._enrich(res, None, None)
+                    info = enrich_onvif_device(res, None, None)
                     self.addItemSignal.emit(info)
             finally:
                 self.finishedSignal.emit()
@@ -121,69 +94,6 @@ class OnvifDiscoveryDialog(QtWidgets.QDialog):
             self.lbl_status.setText("No ONVIF cameras found.")
         else:
             self.lbl_status.setText("Scan complete.")
-
-    # ----------------- enrichment ----------------- #
-    def _enrich(self, res: OnvifDiscoveryResult, user: Optional[str], pwd: Optional[str]) -> dict:
-        info = {
-            "xaddr": res.xaddr,
-            "ip": res.ip,
-            "auth_required": False,
-            "name": res.ip,
-            "model": None,
-            "firmware": None,
-            "profiles": [],
-            "media_xaddr": None,
-            "stream_uri": None,
-            "user": user,
-            "password": pwd,
-            "errors": [],
-            "fallback_urls": [],
-            "zeep_used": False,
-        }
-        # Try zeep (onvif-zeep) first if available; helps picky cameras.
-        profiles_zeep, stream_zeep, errs_zeep = try_onvif_zeep_stream(res.xaddr, user, pwd)
-        if profiles_zeep or stream_zeep:
-            info["profiles"] = profiles_zeep
-            info["stream_uri"] = stream_zeep
-            info["zeep_used"] = True
-        if errs_zeep:
-            info["errors"].extend(errs_zeep)
-
-        client = OnvifClient(res.xaddr, username=user, password=pwd)
-        try:
-            dev = client.get_device_information()
-            if dev:
-                info["name"] = dev.manufacturer or dev.model or res.ip
-                info["model"] = dev.model
-                info["firmware"] = dev.firmware
-        except OnvifAuthError:
-            info["auth_required"] = True
-        except OnvifError as e:
-            info["errors"].append(f"device_info: {e}")
-
-        media_xaddr = None
-        try:
-            caps = client.get_capabilities()
-            media_xaddr = caps.media_xaddr
-            info["media_xaddr"] = media_xaddr
-        except OnvifAuthError:
-            info["auth_required"] = True
-        except OnvifError as e:
-            info["errors"].append(f"capabilities: {e}")
-
-        try:
-            profiles = client.get_profiles(media_xaddr=media_xaddr or res.xaddr)
-            info["profiles"] = [{"token": p.token, "name": p.name} for p in profiles]
-            stream = None
-            if profiles:
-                stream = client.get_stream_uri(profiles[0].token, media_xaddr=media_xaddr or res.xaddr)
-            info["stream_uri"] = stream
-            info["fallback_urls"] = self._guess_fallback_urls(res.ip)
-        except OnvifAuthError:
-            info["auth_required"] = True
-        except OnvifError as e:
-            info["errors"].append(f"media: {e}")
-        return info
 
     # ----------------- UI wiring ----------------- #
     @QtCore.Slot(object)
@@ -230,10 +140,20 @@ class OnvifDiscoveryDialog(QtWidgets.QDialog):
             return
         item = sel[0]
         info = item.data(QtCore.Qt.ItemDataRole.UserRole) or {}
-        user, ok = QtWidgets.QInputDialog.getText(self, "Camera credentials", "Username:", QtWidgets.QLineEdit.EchoMode.Normal)
+        user, ok = QtWidgets.QInputDialog.getText(
+            self,
+            "Camera credentials",
+            "Username:",
+            QtWidgets.QLineEdit.EchoMode.Normal,
+        )
         if not ok:
             return
-        pwd, ok = QtWidgets.QInputDialog.getText(self, "Camera credentials", "Password:", QtWidgets.QLineEdit.EchoMode.Password)
+        pwd, ok = QtWidgets.QInputDialog.getText(
+            self,
+            "Camera credentials",
+            "Password:",
+            QtWidgets.QLineEdit.EchoMode.Password,
+        )
         if not ok:
             return
         user = user.strip()
@@ -244,7 +164,7 @@ class OnvifDiscoveryDialog(QtWidgets.QDialog):
 
         def worker() -> None:
             try:
-                enriched = self._enrich(
+                enriched = enrich_onvif_device(
                     OnvifDiscoveryResult(
                         xaddr=info.get("xaddr"),
                         epr=None,
@@ -265,7 +185,9 @@ class OnvifDiscoveryDialog(QtWidgets.QDialog):
 
     @QtCore.Slot(object, object)
     def _apply_enriched(self, item: object, enriched: object) -> None:
-        if not isinstance(item, QtWidgets.QListWidgetItem) or not isinstance(enriched, dict):
+        if not isinstance(item, QtWidgets.QListWidgetItem) or not isinstance(
+            enriched, dict
+        ):
             return
         item.setData(QtCore.Qt.ItemDataRole.UserRole, enriched)
         self._update_item_label(item, enriched)
@@ -290,24 +212,37 @@ class OnvifDiscoveryDialog(QtWidgets.QDialog):
         user = info.get("user")
         pwd = info.get("password")
         variants: list[str] = []
-        def _add_variant(u: str) -> None:
+
+        def _add_variant(u: str | None) -> None:
             if u and u not in variants:
                 variants.append(u)
+
         _add_variant(stream)
         for u in info.get("fallback_urls") or []:
             _add_variant(u)
-        _add_variant(self._guess_fallback_urls(info.get("ip") or "")[0] if self._guess_fallback_urls(info.get("ip") or "") else None)
+        guesses = guess_fallback_urls(info.get("ip") or "")
+        _add_variant(guesses[0] if guesses else None)
         if (not stream) or info.get("auth_required"):
             # Prompt for creds and attempt once
-            user, ok = QtWidgets.QInputDialog.getText(self, "Camera credentials", "Username:", QtWidgets.QLineEdit.EchoMode.Normal)
+            user, ok = QtWidgets.QInputDialog.getText(
+                self,
+                "Camera credentials",
+                "Username:",
+                QtWidgets.QLineEdit.EchoMode.Normal,
+            )
             if not ok:
                 return
-            pwd, ok = QtWidgets.QInputDialog.getText(self, "Camera credentials", "Password:", QtWidgets.QLineEdit.EchoMode.Password)
+            pwd, ok = QtWidgets.QInputDialog.getText(
+                self,
+                "Camera credentials",
+                "Password:",
+                QtWidgets.QLineEdit.EchoMode.Password,
+            )
             if not ok:
                 return
             user = user.strip()
             try:
-                enriched = self._enrich(
+                enriched = enrich_onvif_device(
                     OnvifDiscoveryResult(
                         xaddr=info.get("xaddr"),
                         epr=None,
@@ -325,16 +260,20 @@ class OnvifDiscoveryDialog(QtWidgets.QDialog):
                     _add_variant(u)
                 self._update_item_label(item, info)
             except Exception as e:
-                QtWidgets.QMessageBox.warning(self, "Add Camera", f"Failed to fetch stream URI: {e}")
+                QtWidgets.QMessageBox.warning(
+                    self, "Add Camera", f"Failed to fetch stream URI: {e}"
+                )
                 return
 
         if not stream:
             # fall back to common RTSP paths
-            candidates = info.get("fallback_urls") or self._guess_fallback_urls(info.get("ip") or "")
+            candidates = info.get("fallback_urls") or guess_fallback_urls(
+                info.get("ip") or ""
+            )
             if candidates:
                 stream = candidates[0]
         # Embed credentials into URL if provided and not already present
-        stream = self._inject_auth(stream, user, pwd)
+        stream = inject_auth(stream, user, pwd)
         alt_streams = [u for u in variants if u and u != stream]
         name = info.get("name") or info.get("model") or info.get("ip") or "ONVIF-Camera"
         cam_cfg = CameraSettings(
@@ -361,7 +300,9 @@ class OnvifDiscoveryDialog(QtWidgets.QDialog):
             prof_lines = []
             for p in profiles:
                 if isinstance(p, dict):
-                    prof_lines.append(f"- {p.get('name') or p.get('token')} (token={p.get('token')})")
+                    prof_lines.append(
+                        f"- {p.get('name') or p.get('token')} (token={p.get('token')})"
+                    )
                 else:
                     prof_lines.append(f"- {p}")
             parts.append("Profiles:\n" + "\n".join(prof_lines))
@@ -380,27 +321,3 @@ class OnvifDiscoveryDialog(QtWidgets.QDialog):
             parts.extend(f"- {u}" for u in fallbacks)
         return "\n".join(parts)
 
-    @staticmethod
-    def _guess_fallback_urls(ip: str) -> list[str]:
-        if not ip:
-            return []
-        return [
-            f"rtsp://{ip}:554/Streaming/Channels/101",
-            f"rtsp://{ip}:554/Streaming/Channels/102",
-            f"rtsp://{ip}:554/live/ch0",
-            f"rtsp://{ip}:554/live/ch1",
-        ]
-
-    @staticmethod
-    def _inject_auth(url: str, user: Optional[str], pwd: Optional[str]) -> str:
-        if not url or not user or not pwd:
-            return url
-        try:
-            parsed = QtCore.QUrl(url)
-            if parsed.userName():
-                return url  # already has creds
-            parsed.setUserName(user)
-            parsed.setPassword(pwd)
-            return parsed.toString()
-        except Exception:
-            return url
