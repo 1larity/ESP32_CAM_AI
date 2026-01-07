@@ -1,13 +1,35 @@
 from __future__ import annotations
 
-from .overlay_cache import _ensure_overlay_cache, _invalidate_overlay_cache, _overlay_toggles_key
-from .overlay_draw import (
-    _draw_hud,
-    _draw_rec_indicator,
-    _draw_stats_line,
-    _overlay_scale_factor,
-)
-from .overlay_render import _render_overlay_cache, _update_pixmap
+if __package__:
+    from .overlay_cache import _ensure_overlay_cache, _invalidate_overlay_cache, _overlay_toggles_key
+    from .overlay_draw import (
+        _draw_hud,
+        _draw_rec_indicator,
+        _draw_stats_line,
+        _overlay_scale_factor,
+    )
+    from .overlay_render import _render_overlay_cache, _update_pixmap
+else:  # Allows running this file directly from an IDE.
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # .../AI
+
+    from UI.camera.overlay_cache import (  # type: ignore[import-not-found]
+        _ensure_overlay_cache,
+        _invalidate_overlay_cache,
+        _overlay_toggles_key,
+    )
+    from UI.camera.overlay_draw import (  # type: ignore[import-not-found]
+        _draw_hud,
+        _draw_rec_indicator,
+        _draw_stats_line,
+        _overlay_scale_factor,
+    )
+    from UI.camera.overlay_render import (  # type: ignore[import-not-found]
+        _render_overlay_cache,
+        _update_pixmap,
+    )
 
 
 def attach_overlay_layer(cls) -> None:
