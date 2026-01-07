@@ -1,12 +1,9 @@
 from __future__ import annotations
-
 import sys
 import time
 from pathlib import Path
 from typing import Callable, Sequence
-
 from PySide6 import QtCore, QtGui, QtWidgets
-
 
 class StartupDialog(QtWidgets.QDialog):
     """
