@@ -56,7 +56,7 @@
   "mqtt_base_topic": "esp32_cam_ai",
   "mqtt_discovery_prefix": "homeassistant",
   "mqtt_user": "homeassistant",
-  "mqtt_password_enc": "zT+UqpCVpobUWzTJm8MVD5SGuuFWuGlxtPUTXhOd9PjwuiMcnZf8Zt4fiYExBM9B4aCgPPw=",
+  "mqtt_password_enc": "3x6fdIn4CgWMKMBWkd4KnG95lwYc+ATup0JCpSrHrvYeJ93Cva0+KwFQpYy18I6gHtqX+Og=",
   "cameras": [
     {
       "name": "Cam-2",
@@ -75,7 +75,7 @@
       "rotation_deg": 0,
       "flip_horizontal": false,
       "flip_vertical": false,
-      "password_enc": "PrRb46jIpgn7XbfTl/7sm8bpFq5AjGXo7/GglbPJTiskzIr81eZEGOcD34xocGzPuw+CdQw="
+      "password_enc": "34t6czswE6wHTCbKWEz5EZ8BwIyL9ettXja2TrHkdxxdVQfQRxd5WzdRY3ekagVCDSkq5zw="
     },
     {
       "name": "Cam-1",
@@ -94,7 +94,7 @@
       "rotation_deg": 0,
       "flip_horizontal": false,
       "flip_vertical": false,
-      "password_enc": "RSR4E2KwZbDLgcesrjci7FJnjwzQA4z+rO4sVsUQ0GSilZqaCnwAwlumS2xO/UCduSavgOg="
+      "password_enc": "+u56H3EtRJ/j914/sCsRgEs3s+zacW0/L0NDdV/9Z2CHsNRi1agMaQBkVTOlwELKELv+vOU="
     },
     {
       "name": "Cam-3",
@@ -120,7 +120,7 @@
       "rotation_deg": 0,
       "flip_horizontal": false,
       "flip_vertical": true,
-      "password_enc": "Ew+X4YBjqUgS+H1+ZucrT+O56XCvq2VB70SLEoiSK96oMb37roVjPPvvH9eQ75Vxl4Z74A=="
+      "password_enc": "ckGc0H1BbQbueWp+Bi8tdBFuWDDuo1h6v96roLb8h0xdoujXtYsTSrZOcET+TCx4pD6/gg=="
     }
   ]
 }
