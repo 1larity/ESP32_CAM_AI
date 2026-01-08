@@ -84,7 +84,20 @@ class CameraWidget(QtWidgets.QWidget):
     def stop(self) -> None:
         self._frame_timer.stop()
         self._capture.stop()
-        self._detector.stop(wait_ms=2000)
+        # Graceful stop for the detector thread, but never hang the app on exit.
+        try:
+            self._detector.stop(wait_ms=2000)
+            if getattr(self._detector, "isRunning", lambda: False)():
+                print(
+                    f"[CameraWidget:{getattr(self.cam_cfg, 'name', '')}] detector thread still running; terminating."
+                )
+                try:
+                    self._detector.terminate()
+                    self._detector.wait(1500)
+                except Exception:
+                    pass
+        except Exception:
+            pass
         self._recorder.close()
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # type: ignore[override]

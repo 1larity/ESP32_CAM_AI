@@ -29,8 +29,10 @@ class FaceRebuildController(QtCore.QObject):
         self._thread: Optional[QtCore.QThread] = None
         self._worker: Optional[_FaceRebuildWorker] = None
         self._dialog: Optional[QtWidgets.QProgressDialog] = None
+        self._shutting_down: bool = False
 
     def start(self, title: str) -> None:
+        self._shutting_down = False
         # Avoid re-entrancy; if a rebuild is already in progress, ignore.
         if self._thread is not None:
             return
@@ -64,6 +66,37 @@ class FaceRebuildController(QtCore.QObject):
 
         thread.start()
 
+    def stop(self, wait_ms: int = 1500) -> None:
+        """
+        Best-effort stop for app shutdown: closes any progress dialog and ensures the worker thread
+        can't keep the process alive.
+        """
+        self._shutting_down = True
+        if self._dialog is not None:
+            try:
+                self._dialog.close()
+            except Exception:
+                pass
+            self._dialog = None
+
+        thread = self._thread
+        self._worker = None
+        self._thread = None
+        if thread is None:
+            return
+        try:
+            if thread.isRunning():
+                thread.quit()
+                thread.wait(int(wait_ms))
+        except Exception:
+            pass
+        try:
+            if thread.isRunning():
+                thread.terminate()
+                thread.wait(500)
+        except Exception:
+            pass
+
     @Slot(bool)
     def _on_finished(self, ok: bool) -> None:
         # Close the progress dialog
@@ -74,6 +107,9 @@ class FaceRebuildController(QtCore.QObject):
         # Clean up worker/thread handles
         self._worker = None
         self._thread = None
+
+        if self._shutting_down:
+            return
 
         # Inform the user of the result
         if ok:
@@ -88,4 +124,3 @@ class FaceRebuildController(QtCore.QObject):
                 "Rebuild Face Model",
                 "No face samples found to rebuild.",
             )
-

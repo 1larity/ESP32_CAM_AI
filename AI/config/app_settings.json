@@ -13,24 +13,31 @@
   "window_state": "000000ff00000000fd00000001000000010000011b000003aafc0200000001fb00000014006500760065006e007400730044006f0063006b0100000016000003aa0000009100ffffff0000053f000003aa00000004000000040000000800000008fc00000000",
   "window_geometries": {
     "Cam-2": [
-      803,
+      672,
       470,
-      540,
+      671,
       468,
       0
     ],
     "Cam-1": [
-      803,
       0,
-      540,
       470,
+      672,
+      468,
       0
     ],
     "Cam-3": [
+      672,
+      0,
+      671,
+      470,
+      0
+    ],
+    "Cam-4": [
       0,
       0,
-      806,
-      938,
+      672,
+      470,
       0
     ]
   },
@@ -57,13 +64,14 @@
   "mqtt_discovery_prefix": "homeassistant",
   "mqtt_discovery_under_base_topic": false,
   "mqtt_user": "homeassistant",
-  "mqtt_password_enc": "WJTEoZcA+C/69ppIBoFu9L3vCaVCamLtWFmLh+necF6dDM0RL9lvYhXkYeKGp44LoM30P/s=",
+  "mqtt_password_enc": "9tXaTW/nS9JuAIKV/hjUUlgGUyHW3olTstgNCiDhtgccIlf6DD1flxXq0r+3fJCt3YpRVeo=",
   "cameras": [
     {
       "name": "Cam-2",
       "stream_url": "http://192.168.1.132:81/stream",
       "user": "sysadm",
       "token": null,
+      "mqtt_publish": true,
       "alt_streams": [],
       "view_scale": 0.6266666666666667,
       "record_motion": false,
@@ -76,13 +84,14 @@
       "rotation_deg": 0,
       "flip_horizontal": false,
       "flip_vertical": false,
-      "password_enc": "hJPnde3E2evc+HxCZF7MUTka5SFL0ReStqeXg1fbJHrp8X5qGWGn4qLmBlYXHMVyuunJ9ZU="
+      "password_enc": "EEXdq3/BaLNaKVqA80g0N8UKEeI8wNfpihGS0oyowpcREBdR4ITTXfFRV4Nmi1jSoF5dwAg="
     },
     {
       "name": "Cam-1",
       "stream_url": "http://192.168.1.130:81/stream",
       "user": "sysadm",
       "token": null,
+      "mqtt_publish": true,
       "alt_streams": [],
       "view_scale": 0.63,
       "record_motion": false,
@@ -95,13 +104,14 @@
       "rotation_deg": 0,
       "flip_horizontal": false,
       "flip_vertical": false,
-      "password_enc": "bypi1gVm6zlxqYcVxrclfKPCeX2cWT6qTZwj3c3M8Wvx5SyxkPLWUuew5UhgNgD5pndoFIM="
+      "password_enc": "4mF9CqsGGVZu5yOcp255kxzNJMHKYeVcmvGJiv0r35z/CA+Erl8aKej5v1gJxparUzgZO18="
     },
     {
       "name": "Cam-3",
       "stream_url": "rtsp://192.168.1.78:8554/Streaming/Channels/102",
       "user": "admin",
       "token": null,
+      "mqtt_publish": true,
       "alt_streams": [
         "rtsp://192.168.1.78:8554/Streaming/Channels/101",
         "rtsp://192.168.1.78:554/Streaming/Channels/101",
@@ -121,13 +131,14 @@
       "rotation_deg": 0,
       "flip_horizontal": false,
       "flip_vertical": true,
-      "password_enc": "C/v5hrBgrPsxZod2d5QHakY8Sy2j9k7nOKiew8SWXTf1ZtjhURu1OV8Fk7qUd2kCswA/tw=="
+      "password_enc": "Sfn7bFgnNVYtZpW7doG/kBzjXQz83w3Mrt5mkrztxUuO3X2FP2mtzOW2izFHOkLhTEBZhQ=="
     },
     {
       "name": "Cam-4",
       "stream_url": "rtsp://admin:Akira100@192.168.1.2:8554/Streaming/Channels/102",
       "user": "admin",
       "token": null,
+      "mqtt_publish": true,
       "alt_streams": [
         "rtsp://admin:Akira100@192.168.1.2:8554/Streaming/Channels/101",
         "rtsp://192.168.1.2:8554/Streaming/Channels/101",
@@ -145,7 +156,7 @@
       "rotation_deg": 180,
       "flip_horizontal": false,
       "flip_vertical": false,
-      "password_enc": "7XiWl95Bk+ZyIJ/EOuDnptNb0qUaHGfuYXqTI8JIU7ufBPbvHMSAih4xzijZPxYEKgaKZQ=="
+      "password_enc": "JWdIvF2hA5zy7EIAa+qkzKDyZegJQ769wvRGnhDnd8gaYPvCSLLIIlniJyt+yRbTiJYGzA=="
     }
   ]
 }

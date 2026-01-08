@@ -114,21 +114,46 @@ class MqttService:
             print(f"[MQTT] connect failed: {e}")
 
     def stop(self) -> None:
+        # Important: do not hold our lock while calling into paho; disconnect/loop_stop can
+        # trigger callbacks on the network thread that also want this lock (deadlock on exit).
         with self._lock:
-            if self.client is None:
-                return
-            try:
-                if self.connected:
-                    self.client.publish(self._avail_topic, payload="offline", retain=True)
-                self.client.disconnect()
-            except Exception:
-                pass
-            try:
-                self.client.loop_stop()
-            except Exception:
-                pass
+            client = self.client
+            was_connected = bool(self.connected)
+            # Prevent further publishes immediately.
             self.client = None
             self.connected = False
+            self._last_published.clear()
+
+        if client is None:
+            return
+
+        # Detach callbacks to avoid reentrancy into this object while stopping.
+        try:
+            client.on_connect = None
+            client.on_disconnect = None
+        except Exception:
+            pass
+
+        # Best-effort offline LWT publish (retained).
+        if was_connected:
+            try:
+                client.publish(self._avail_topic, payload="offline", retain=True)
+            except Exception:
+                pass
+
+        try:
+            client.disconnect()
+        except Exception:
+            pass
+
+        # Ensure the network loop thread can't keep the process alive on exit.
+        try:
+            try:
+                client.loop_stop(force=True)
+            except TypeError:
+                client.loop_stop()
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------ #
     # Publish helper
