@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from PySide6 import QtGui, QtWidgets
 
+from ha_discovery import publish_discovery
 from settings import CameraSettings, save_settings
 from UI.camera import CameraWidget
 from UI.ip_cam_dialog import AddIpCameraDialog
@@ -43,6 +44,17 @@ def _add_camera_window(self, cam_cfg: CameraSettings) -> None:
     w.start()
     sub.show()
 
+    try:
+        if self._mqtt is not None and getattr(self._mqtt, "connected", False):
+            publish_discovery(
+                self._mqtt,
+                self.app_cfg.cameras,
+                getattr(self.app_cfg, "mqtt_discovery_prefix", "homeassistant"),
+                getattr(self._mqtt, "base_topic", getattr(self.app_cfg, "mqtt_base_topic", "esp32_cam_ai")),
+            )
+    except Exception:
+        pass
+
 
 def _add_camera_url_dialog(self) -> None:
     text, ok = QtWidgets.QInputDialog.getText(self, "Add Camera", "Enter RTSP or HTTP stream URL:")
@@ -50,6 +62,7 @@ def _add_camera_url_dialog(self) -> None:
         cam_cfg = CameraSettings(
             name=f"Custom-{len(self.app_cfg.cameras) + 1}",
             stream_url=text,
+            record_motion=False,
         )
         self.app_cfg.cameras.append(cam_cfg)
         self._add_camera_window(cam_cfg)
@@ -63,6 +76,7 @@ def _add_camera_ip_dialog(self) -> None:
         if cam_cfg is not None:
             self.app_cfg.cameras.append(cam_cfg)
             self._add_camera_window(cam_cfg)
+            save_settings(self.app_cfg)
 
 
 def _remove_camera_dialog(self) -> None:
@@ -140,6 +154,14 @@ def _rename_camera_dialog(self) -> None:
     for c in self.app_cfg.cameras:
         if getattr(c, "name", "") == old:
             c.name = new
+    # Move any stored geometry under the new name so the window layout persists.
+    try:
+        geo = self.app_cfg.window_geometries or {}
+        if old in geo and new not in geo:
+            geo[new] = geo.pop(old)
+            self.app_cfg.window_geometries = geo
+    except Exception:
+        pass
     for sub in list(self.mdi.subWindowList()):
         if sub.windowTitle() == old:
             sub.setWindowTitle(new)
@@ -149,6 +171,22 @@ def _rename_camera_dialog(self) -> None:
                     w.cam_cfg.name = new
                 except Exception:
                     pass
+            # Keep camera-specific MQTT topic in sync when renaming.
+            if hasattr(w, "_mqtt_topic"):
+                try:
+                    w._mqtt_topic = new.replace(" ", "_")
+                except Exception:
+                    pass
+            if hasattr(w, "_presence"):
+                try:
+                    w._presence.cam = new
+                    w._presence._mqtt_topic = new.replace(" ", "_")
+                except Exception:
+                    pass
+            if hasattr(w, "_recorder"):
+                try:
+                    w._recorder.cam_name = new
+                except Exception:
+                    pass
     save_settings(self.app_cfg)
     QtWidgets.QMessageBox.information(self, "Rename Camera", f"Renamed '{old}' to '{new}'.")
-

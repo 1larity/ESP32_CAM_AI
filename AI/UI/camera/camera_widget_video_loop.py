@@ -66,8 +66,6 @@ def attach_video_loop_handlers(cls) -> None:
         pkt = pkt_obj
         if not isinstance(pkt, DetectionPacket):
             return
-        if pkt.name != self.cam_cfg.name:
-            return
 
         # Presence log
         self._presence.update(pkt)
@@ -117,6 +115,8 @@ def attach_video_loop_handlers(cls) -> None:
     def _publish_mqtt_state(self, pkt: DetectionPacket) -> None:
         if not getattr(self, "_mqtt", None):
             return
+        if not bool(getattr(self.cam_cfg, "mqtt_publish", True)):
+            return
         if not getattr(self._mqtt, "connected", False):
             return
         person_count = 0
@@ -155,4 +155,3 @@ def attach_video_loop_handlers(cls) -> None:
     cls._publish_mqtt_state = _publish_mqtt_state
     cls._snapshot = _snapshot
     cls._toggle_recording = _toggle_recording
-

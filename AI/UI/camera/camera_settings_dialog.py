@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from PySide6 import QtCore, QtWidgets
 
+from ha_discovery import publish_discovery
+
 
 class CameraSettingsDialog(QtWidgets.QDialog):
     """
@@ -17,6 +19,10 @@ class CameraSettingsDialog(QtWidgets.QDialog):
 
         layout = QtWidgets.QFormLayout(self)
 
+        # Camera name
+        self.edit_name = QtWidgets.QLineEdit(getattr(cam_cfg, "name", "") or "")
+        layout.addRow("Name", self.edit_name)
+
         # Motion recording toggle
         default_motion = getattr(cam_cfg, "record_motion", None)
         if default_motion is None:
@@ -24,6 +30,11 @@ class CameraSettingsDialog(QtWidgets.QDialog):
         self.cb_motion = QtWidgets.QCheckBox("Record motion (no detection)")
         self.cb_motion.setChecked(bool(default_motion))
         layout.addRow(self.cb_motion)
+
+        # MQTT per-camera toggle
+        self.cb_mqtt = QtWidgets.QCheckBox("Send MQTT messages")
+        self.cb_mqtt.setChecked(bool(getattr(cam_cfg, "mqtt_publish", True)))
+        layout.addRow(self.cb_mqtt)
 
         # Motion sensitivity slider
         default_sens = getattr(cam_cfg, "motion_sensitivity", None)
@@ -134,6 +145,25 @@ class CameraSettingsDialog(QtWidgets.QDialog):
         buttons.rejected.connect(self.reject)
         layout.addRow(buttons)
 
+    def accept(self) -> None:  # type: ignore[override]
+        new_name = (self.edit_name.text() or "").strip()
+        if not new_name:
+            QtWidgets.QMessageBox.warning(self, "Camera Settings", "Camera name cannot be empty.")
+            return
+        old_name = (getattr(self.cam_cfg, "name", "") or "").strip()
+        if new_name != old_name:
+            for c in getattr(self.app_defaults, "cameras", []) or []:
+                if c is self.cam_cfg:
+                    continue
+                if (getattr(c, "name", "") or "").strip() == new_name:
+                    QtWidgets.QMessageBox.warning(
+                        self,
+                        "Camera Settings",
+                        "A camera with that name already exists.",
+                    )
+                    return
+        super().accept()
+
     def _wrap_slider(self, slider: QtWidgets.QSlider, width: int = 40) -> QtWidgets.QWidget:
         c = QtWidgets.QWidget()
         h = QtWidgets.QHBoxLayout(c)
@@ -160,9 +190,81 @@ class CameraSettingsDialog(QtWidgets.QDialog):
                     self.cb_stream.setCurrentIndex(idx)
 
     def apply(self):
+        # Rename (if requested)
+        old_name = getattr(self.cam_cfg, "name", "") or ""
+        new_name = (self.edit_name.text() or "").strip()
+        renamed = False
+        if new_name and new_name != old_name:
+            renamed = True
+            # Clear old retained MQTT topics before switching topic base.
+            try:
+                if bool(getattr(self.cam_cfg, "mqtt_publish", True)):
+                    self.widget._publish_mqtt_cleared_state()
+            except Exception:
+                pass
+
+            self.cam_cfg.name = new_name
+            try:
+                if getattr(self.widget, "_subwindow", None) is not None:
+                    self.widget._subwindow.setWindowTitle(new_name)
+            except Exception:
+                pass
+            try:
+                if hasattr(self.widget, "_recorder"):
+                    self.widget._recorder.cam_name = new_name
+            except Exception:
+                pass
+
+            # Persist window geometry under the new name.
+            try:
+                geo = getattr(self.app_defaults, "window_geometries", None) or {}
+                if old_name in geo and new_name not in geo:
+                    geo[new_name] = geo.pop(old_name)
+                    self.app_defaults.window_geometries = geo
+            except Exception:
+                pass
+
+            # Update camera-specific MQTT topic base for future publishes.
+            try:
+                new_topic = new_name.replace(" ", "_")
+                self.widget._mqtt_topic = new_topic
+                if hasattr(self.widget, "_presence"):
+                    self.widget._presence.cam = new_name
+                    self.widget._presence._mqtt_topic = new_topic
+            except Exception:
+                pass
+
+            try:
+                mqtt = getattr(self.widget, "_mqtt", None)
+                if mqtt is not None and getattr(mqtt, "connected", False):
+                    publish_discovery(
+                        mqtt,
+                        getattr(self.app_defaults, "cameras", []) or [],
+                        getattr(self.app_defaults, "mqtt_discovery_prefix", "homeassistant"),
+                        getattr(mqtt, "base_topic", getattr(self.app_defaults, "mqtt_base_topic", "esp32_cam_ai")),
+                    )
+            except Exception:
+                pass
+
         # Motion
         self.cam_cfg.record_motion = self.cb_motion.isChecked()
         self.cam_cfg.motion_sensitivity = int(self.s_motion.value())
+
+        # MQTT
+        mqtt_on = bool(self.cb_mqtt.isChecked())
+        if hasattr(self.widget, "_apply_mqtt_publish"):
+            try:
+                self.widget._apply_mqtt_publish(mqtt_on)
+            except Exception:
+                pass
+        else:
+            self.cam_cfg.mqtt_publish = mqtt_on
+
+        if renamed and mqtt_on:
+            try:
+                self.widget._publish_mqtt_snapshot()
+            except Exception:
+                pass
 
         # AI
         ai_enabled = self.cb_ai_enabled.isChecked()

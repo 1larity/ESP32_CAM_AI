@@ -79,6 +79,7 @@ class CameraWidget(QtWidgets.QWidget):
         self._capture.start()
         self._detector.start()
         self._frame_timer.start()
+        self._publish_mqtt_snapshot()
 
     def stop(self) -> None:
         self._frame_timer.stop()
@@ -184,6 +185,91 @@ class CameraWidget(QtWidgets.QWidget):
             save_settings(self.app_cfg)
             # make sure any motion toggle/sensitivity changes apply immediately
             self._overlay_cache_dirty = True
+
+    def _mqtt_topic_base(self) -> str:
+        return getattr(self, "_mqtt_topic", None) or (self.cam_cfg.name or "cam").replace(" ", "_")
+
+    def _publish_mqtt_cleared_state(self) -> None:
+        if not getattr(self, "_mqtt", None):
+            return
+        if not getattr(self._mqtt, "connected", False):
+            return
+        topic_base = self._mqtt_topic_base()
+        try:
+            self._mqtt.publish(f"{topic_base}/presence/person", "OFF", retain=True)
+            self._mqtt.publish(f"{topic_base}/presence/pet", "OFF", retain=True)
+            self._mqtt.publish(f"{topic_base}/counts/person", "0", retain=True)
+            self._mqtt.publish(f"{topic_base}/counts/pet", "0", retain=True)
+            self._mqtt.publish(f"{topic_base}/recognized", "", retain=True)
+
+            pres = getattr(self, "_presence", None)
+            for k in list(getattr(pres, "present", []) or []):
+                if isinstance(k, str) and k.startswith("person:"):
+                    label = k.split(":", 1)[1].strip()
+                    if label:
+                        self._mqtt.publish(
+                            f"{topic_base}/presence/person/{label}", "OFF", retain=True
+                        )
+                elif k in ("dog", "cat"):
+                    self._mqtt.publish(f"{topic_base}/presence/{k}", "OFF", retain=True)
+        except Exception:
+            pass
+
+    def _publish_mqtt_snapshot(self) -> None:
+        if not getattr(self, "_mqtt", None):
+            return
+        if not getattr(self._mqtt, "connected", False):
+            return
+        if not bool(getattr(self.cam_cfg, "mqtt_publish", True)):
+            return
+
+        # Publish current presence state based on the PresenceBus set.
+        pres = getattr(self, "_presence", None)
+        if pres is not None:
+            try:
+                pres._mqtt = self._mqtt  # ensure publish is enabled
+                for k in list(getattr(pres, "present", []) or []):
+                    pres._publish_state(k, True)
+                pres._publish_aggregate_states()
+            except Exception:
+                pass
+
+        # Publish counts/recognised based on last packet (fallback to zeros).
+        pkt = getattr(self, "_last_pkt", None)
+        if pkt is not None:
+            try:
+                self._publish_mqtt_state(pkt)
+                return
+            except Exception:
+                pass
+
+        topic_base = self._mqtt_topic_base()
+        try:
+            self._mqtt.publish(f"{topic_base}/counts/person", "0", retain=True)
+            self._mqtt.publish(f"{topic_base}/counts/pet", "0", retain=True)
+            self._mqtt.publish(f"{topic_base}/recognized", "", retain=True)
+        except Exception:
+            pass
+
+    def _apply_mqtt_publish(self, enabled: bool) -> None:
+        enabled = bool(enabled)
+        prev = bool(getattr(self.cam_cfg, "mqtt_publish", True))
+        if prev == enabled:
+            return
+
+        if not enabled:
+            # Publish a final retained "cleared" state so HA doesn't stay stuck ON.
+            self._publish_mqtt_cleared_state()
+
+        self.cam_cfg.mqtt_publish = enabled
+        if hasattr(self, "_presence"):
+            try:
+                self._presence._mqtt = self._mqtt if enabled else None
+            except Exception:
+                pass
+
+        if enabled:
+            self._publish_mqtt_snapshot()
 
 
 # Keep module-level attachment too (harmless with the class guard above).

@@ -55,8 +55,9 @@
   "mqtt_keepalive": 60,
   "mqtt_base_topic": "esp32_cam_ai",
   "mqtt_discovery_prefix": "homeassistant",
+  "mqtt_discovery_under_base_topic": false,
   "mqtt_user": "homeassistant",
-  "mqtt_password_enc": "Slu6UTk5alWLRyWn94lk4i7W6EqIwQyuI/CO37xxwbd1GBoqhyhmhTA2VjG8zfNDJl/nsQw=",
+  "mqtt_password_enc": "WJTEoZcA+C/69ppIBoFu9L3vCaVCamLtWFmLh+necF6dDM0RL9lvYhXkYeKGp44LoM30P/s=",
   "cameras": [
     {
       "name": "Cam-2",
@@ -75,7 +76,7 @@
       "rotation_deg": 0,
       "flip_horizontal": false,
       "flip_vertical": false,
-      "password_enc": "0ir3FuTJXj0C7ERSW8EmN8XP3SPHRlEcZVUG0SrmZD2j16xRG3OCvqcr1HJYY31g1b1Kpho="
+      "password_enc": "hJPnde3E2evc+HxCZF7MUTka5SFL0ReStqeXg1fbJHrp8X5qGWGn4qLmBlYXHMVyuunJ9ZU="
     },
     {
       "name": "Cam-1",
@@ -84,7 +85,7 @@
       "token": null,
       "alt_streams": [],
       "view_scale": 0.63,
-      "record_motion": true,
+      "record_motion": false,
       "motion_sensitivity": 53,
       "ai_enabled": true,
       "ai_yolo": true,
@@ -94,7 +95,7 @@
       "rotation_deg": 0,
       "flip_horizontal": false,
       "flip_vertical": false,
-      "password_enc": "8q7wRr1O4fSaj681qgWll4BfkEitg6xPuVvnAQU7xBgXmzXsZHxgD4BkA5uJted7a4qMBtw="
+      "password_enc": "bypi1gVm6zlxqYcVxrclfKPCeX2cWT6qTZwj3c3M8Wvx5SyxkPLWUuew5UhgNgD5pndoFIM="
     },
     {
       "name": "Cam-3",
@@ -109,7 +110,7 @@
         "rtsp://192.168.1.78:554/Streaming/Channels/201",
         "rtsp://192.168.1.78:8554/Streaming/Channels/202"
       ],
-      "view_scale": 1.2458541334035067,
+      "view_scale": 1.0216003893908756,
       "record_motion": false,
       "motion_sensitivity": 53,
       "ai_enabled": true,
@@ -120,7 +121,31 @@
       "rotation_deg": 0,
       "flip_horizontal": false,
       "flip_vertical": true,
-      "password_enc": "vb19G7gMYFIo9A9HTdeuPJ8bnWV5xV3XBYMjdFjKa1yAfVE8Nq4bee6Vp0IABHcH/ravLA=="
+      "password_enc": "C/v5hrBgrPsxZod2d5QHakY8Sy2j9k7nOKiew8SWXTf1ZtjhURu1OV8Fk7qUd2kCswA/tw=="
+    },
+    {
+      "name": "Cam-4",
+      "stream_url": "rtsp://admin:Akira100@192.168.1.2:8554/Streaming/Channels/102",
+      "user": "admin",
+      "token": null,
+      "alt_streams": [
+        "rtsp://admin:Akira100@192.168.1.2:8554/Streaming/Channels/101",
+        "rtsp://192.168.1.2:8554/Streaming/Channels/101",
+        "rtsp://192.168.1.2:554/Streaming/Channels/101",
+        "rtsp://admin:Akira100@192.168.1.2:8554/Streaming/Channels/201"
+      ],
+      "view_scale": 1.0,
+      "record_motion": true,
+      "motion_sensitivity": 53,
+      "ai_enabled": true,
+      "ai_yolo": true,
+      "ai_faces": true,
+      "ai_pets": true,
+      "overlay_scale": 2.7,
+      "rotation_deg": 180,
+      "flip_horizontal": false,
+      "flip_vertical": false,
+      "password_enc": "7XiWl95Bk+ZyIJ/EOuDnptNb0qUaHGfuYXqTI8JIU7ufBPbvHMSAih4xzijZPxYEKgaKZQ=="
     }
   ]
 }

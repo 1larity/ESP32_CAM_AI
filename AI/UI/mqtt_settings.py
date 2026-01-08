@@ -25,6 +25,22 @@ class MqttSettingsDialog(QtWidgets.QDialog):
         self.edit_base_topic = QtWidgets.QLineEdit(app_cfg.mqtt_base_topic or "esp32_cam_ai")
         self.edit_discovery = QtWidgets.QLineEdit(app_cfg.mqtt_discovery_prefix or "homeassistant")
 
+        self.chk_discovery_under_base = QtWidgets.QCheckBox("Publish discovery under base topic (legacy)")
+        self.chk_discovery_under_base.setChecked(
+            bool(getattr(app_cfg, "mqtt_discovery_under_base_topic", False))
+        )
+        self.chk_discovery_under_base.setToolTip(
+            "If enabled, discovery configs publish to <base topic>/<discovery prefix>/... instead of <discovery prefix>/..."
+        )
+
+        self.btn_reset_discovery = QtWidgets.QToolButton()
+        self.btn_reset_discovery.setText("Reset")
+        self.btn_reset_discovery.clicked.connect(self._reset_discovery_defaults)
+
+        discovery_row = QtWidgets.QHBoxLayout()
+        discovery_row.addWidget(self.edit_discovery, 1)
+        discovery_row.addWidget(self.btn_reset_discovery)
+
         self.chk_tls = QtWidgets.QCheckBox("Use TLS (recommended)")
         self.chk_tls.setChecked(bool(app_cfg.mqtt_tls))
 
@@ -55,7 +71,8 @@ class MqttSettingsDialog(QtWidgets.QDialog):
         form.addRow("Port", self.spin_port)
         form.addRow("Client ID (optional)", self.edit_client_id)
         form.addRow("Base topic", self.edit_base_topic)
-        form.addRow("Discovery prefix", self.edit_discovery)
+        form.addRow("Discovery prefix", discovery_row)
+        form.addRow(self.chk_discovery_under_base)
         form.addRow(self.chk_tls)
         form.addRow("CA certificate", ca_row)
         form.addRow(self.chk_insecure)
@@ -66,7 +83,9 @@ class MqttSettingsDialog(QtWidgets.QDialog):
 
         info = QtWidgets.QLabel(
             "Password is stored encrypted locally (not synced). "
-            "Leave password blank to keep the existing one, or tick 'Clear' to remove."
+            "Leave password blank to keep the existing one, or tick 'Clear' to remove.\n\n"
+            "Home Assistant tip: keep Discovery prefix as 'homeassistant' and keep "
+            "'Publish discovery under base topic' off."
         )
         info.setWordWrap(True)
 
@@ -81,6 +100,10 @@ class MqttSettingsDialog(QtWidgets.QDialog):
         layout.addLayout(form)
         layout.addWidget(info)
         layout.addWidget(btns)
+
+    def _reset_discovery_defaults(self) -> None:
+        self.edit_discovery.setText("homeassistant")
+        self.chk_discovery_under_base.setChecked(False)
 
     def _choose_ca_file(self):
         path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Select CA certificate", "", "Certificates (*.crt *.pem);;All Files (*)")
@@ -100,6 +123,7 @@ class MqttSettingsDialog(QtWidgets.QDialog):
         cfg.mqtt_client_id = self.edit_client_id.text().strip() or None
         cfg.mqtt_base_topic = self.edit_base_topic.text().strip() or "esp32_cam_ai"
         cfg.mqtt_discovery_prefix = self.edit_discovery.text().strip() or "homeassistant"
+        cfg.mqtt_discovery_under_base_topic = self.chk_discovery_under_base.isChecked()
         cfg.mqtt_tls = self.chk_tls.isChecked()
         ca_path = self.edit_ca.text().strip()
         cfg.mqtt_ca_path = ca_path or None

@@ -55,6 +55,9 @@ class PresenceBus:
                 self._write(self._rec_payload(now, k, "enter"))
                 self._publish_state(k, True)
 
+        # Aggregate "any person" / "any pet" topics for Home Assistant.
+        self._publish_aggregate_states()
+
     def _write(self, rec: Dict):
         ensure_dir(self.logs_dir)
         f = self.logs_dir / f"{self.cam}.jsonl"
@@ -74,21 +77,38 @@ class PresenceBus:
             label = key.split(":", 1)[1]
         return {"ts": ts_wall, "camera": self.cam, "event": event, "type": base_type, "label": label}
 
+    def _publish_aggregate_states(self) -> None:
+        if self._mqtt is None or not getattr(self._mqtt, "connected", False):
+            return
+        topic_base = self._mqtt_topic or self.cam
+        any_person = any((k == "person") or k.startswith("person:") for k in self.present)
+        any_pet = any(k in ("dog", "cat") for k in self.present)
+        try:
+            self._mqtt.publish(
+                f"{topic_base}/presence/person", "ON" if any_person else "OFF", retain=True
+            )
+            self._mqtt.publish(
+                f"{topic_base}/presence/pet", "ON" if any_pet else "OFF", retain=True
+            )
+        except Exception as e:
+            print(f"[MQTT] presence aggregate publish error: {e}")
+
     def _publish_state(self, key: str, is_on: bool) -> None:
         if self._mqtt is None or not getattr(self._mqtt, "connected", False):
             return
-        base_type = key
-        label = None
-        if key.startswith("person:"):
-            base_type = "person"
-            label = key.split(":", 1)[1]
-        payload = "ON" if is_on else "OFF"
         topic_base = self._mqtt_topic or self.cam
         try:
-            self._mqtt.publish(f"{topic_base}/presence/{base_type}", payload, retain=True)
-            if base_type in ("dog", "cat"):
-                self._mqtt.publish(f"{topic_base}/presence/pet", payload, retain=True)
-            if label:
-                self._mqtt.publish(f"{topic_base}/presence/person/{label}", payload, retain=True)
+            payload = "ON" if is_on else "OFF"
+            # Per-entity topics only; aggregate topics are published separately.
+            if key.startswith("person:"):
+                label = key.split(":", 1)[1]
+                if label:
+                    self._mqtt.publish(
+                        f"{topic_base}/presence/person/{label}", payload, retain=True
+                    )
+                return
+            if key in ("dog", "cat"):
+                self._mqtt.publish(f"{topic_base}/presence/{key}", payload, retain=True)
+                return
         except Exception as e:
             print(f"[MQTT] presence publish error: {e}")

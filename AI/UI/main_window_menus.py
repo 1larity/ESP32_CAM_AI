@@ -33,7 +33,6 @@ def build_menus(win: "MainWindow") -> None:
     m_cams.addAction("Add Camera by IP…").triggered.connect(win._add_camera_ip_dialog)
     m_cams.addAction("Add Camera by URL…").triggered.connect(win._add_camera_url_dialog)
     m_cams.addAction("Remove Camera…").triggered.connect(win._remove_camera_dialog)
-    m_cams.addAction("Rename Camera…").triggered.connect(win._rename_camera_dialog)
     m_cams.addSeparator()
     m_cams.addAction("Discover ESP32-CAMs…").triggered.connect(win._open_discovery)
     m_cams.addAction("Discover ONVIF Cameras…").triggered.connect(win._open_onvif_discovery)
@@ -103,4 +102,3 @@ def build_menus(win: "MainWindow") -> None:
     m_view.addAction("Resize windows to video size").triggered.connect(
         win._resize_all_to_video
     )
-

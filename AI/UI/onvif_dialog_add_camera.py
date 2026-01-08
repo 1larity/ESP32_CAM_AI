@@ -64,8 +64,8 @@ def build_camera_settings_from_selection(
         alt_streams=alt_streams,
         user=user or None,
         password=pwd or None,
+        record_motion=False,
     )
 
 
 __all__ = ["build_camera_settings_from_selection"]
-

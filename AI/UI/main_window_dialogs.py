@@ -36,6 +36,7 @@ def _open_discovery(self) -> None:
                 stream_url=cam_info.get("stream_url"),
                 user=cam_info.get("user"),
                 password=cam_info.get("password"),
+                record_motion=False,
             )
             self.app_cfg.cameras.append(cam_cfg)
             self._add_camera_window(cam_cfg)
@@ -68,4 +69,3 @@ def _open_unknown_capture_dialog(self) -> None:
             auto_train=getattr(self.app_cfg, "auto_train_unknowns", False),
         )
         save_settings(self.app_cfg)
-

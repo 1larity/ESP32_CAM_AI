@@ -52,5 +52,7 @@ Python Desktop App User Guide
 - View and control: each camera opens in its own window with live view. PTZ/flash controls remain in the camera web UI; use the viewer for monitoring and status.
 - Recording: click Record to start per-camera capture (AVI/MJPG on Windows, MP4V fallback). Files save under `ai/recordings/`, auto-adjusted to even dimensions.
 - AI overlays: toggle YOLO/face/pet detection from the camera window toolbar (AI dropdown). Overlays stay local; no cloud required.
+- Home Assistant (MQTT): Tools -> MQTT Settings; keep Discovery prefix `homeassistant` and leave "Publish discovery under base topic (legacy)" unchecked for default HA discovery.
+- Home Assistant Persons: assign the discovered `device_tracker` (camera person / recognised name) entities to a HA Person under Settings -> People; increase "Presence grace" in the Face Tuner if it flaps.
 - Logs and events: presence/dog events are written under `ai/logs/events_<name>_<host>.log` and shown in the Events sidebar.
 - Tips: if streams stall, lower resolution in the camera web UI; verify `/api/status` and `/stream` load in a browser when adding a camera; keep firmware and app on the same LAN for best latency.

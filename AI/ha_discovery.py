@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import re
+import zlib
+from pathlib import Path
 from typing import Iterable
 
 from mqtt_client import MqttService
@@ -19,7 +22,49 @@ def _device_block(cam_name: str) -> dict:
 
 
 def _pub_config(mqtt: MqttService, topic: str, payload: dict) -> None:
-    mqtt.publish(topic, json.dumps(payload), retain=True)
+    payload_json = json.dumps(payload)
+    fn = getattr(mqtt, "publish_discovery_config", None)
+    if callable(fn):
+        fn(topic, payload_json, retain=True)
+    else:
+        mqtt.publish(topic, payload_json, retain=True)
+
+
+def _slug(s: str, fallback_prefix: str) -> str:
+    """
+    Home Assistant IDs must be URL-ish; keep it simple and stable.
+    """
+    raw = (s or "").strip()
+    raw = raw.replace(" ", "_")
+    out = re.sub(r"[^0-9A-Za-z_]+", "_", raw).strip("_").lower()
+    if out:
+        return out
+    crc = zlib.crc32(raw.encode("utf-8")) & 0xFFFFFFFF
+    return f"{fallback_prefix}_{crc:08x}"
+
+
+def _load_face_labels(models_dir: object | None) -> list[str]:
+    """
+    Return known face label names from models_dir/labels_faces.json (written by LBPH training).
+
+    File format is { "<name>": <id>, ... }.
+    """
+    if not models_dir:
+        return []
+    try:
+        p = Path(str(models_dir))
+        labels_path = p / "labels_faces.json"
+        if not labels_path.exists():
+            return []
+        raw = json.loads(labels_path.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            return []
+        names = [str(k).strip() for k in raw.keys()]
+        names = [n for n in names if n]
+        # Stable ordering for predictable entity IDs.
+        return sorted(set(names), key=str.casefold)
+    except Exception:
+        return []
 
 
 def publish_discovery(mqtt: MqttService, cameras: Iterable[object], discovery_prefix: str, base_topic: str) -> None:
@@ -27,6 +72,7 @@ def publish_discovery(mqtt: MqttService, cameras: Iterable[object], discovery_pr
         return
     prefix = discovery_prefix.strip("/")
     avail = f"{base_topic}/status"
+    face_labels = _load_face_labels(getattr(getattr(mqtt, "cfg", None), "models_dir", None))
     for cam in cameras:
         name = getattr(cam, "name", None) or "cam"
         dev = _device_block(name)
@@ -91,3 +137,34 @@ def publish_discovery(mqtt: MqttService, cameras: Iterable[object], discovery_pr
             "icon": "mdi:account-badge",
         }
         _pub_config(mqtt, f"{prefix}/sensor/{obj_id}_recognized/config", cfg)
+
+        # device_tracker: person present (maps ON/OFF to home/not_home for HA "person" integration)
+        cfg = {
+            "name": f"{name} Person (Camera)",
+            "unique_id": f"{obj_id}_person_tracker",
+            "state_topic": f"{base_topic}/{topic_cam}/presence/person",
+            "payload_home": "ON",
+            "payload_not_home": "OFF",
+            "availability_topic": avail,
+            "source_type": "router",
+            "device": dev,
+        }
+        _pub_config(mqtt, f"{prefix}/device_tracker/{obj_id}_person/config", cfg)
+
+        # device_tracker: known recognised names (requires LBPH labels_faces.json)
+        for label in face_labels:
+            if label.casefold() in ("unknown", "face", "person"):
+                continue
+            label_id = _slug(label, "person")
+            cfg = {
+                "name": f"{label} ({name})",
+                "unique_id": f"{obj_id}_person_{label_id}_tracker",
+                "state_topic": f"{base_topic}/{topic_cam}/presence/person/{label}",
+                "payload_home": "ON",
+                "payload_not_home": "OFF",
+                "availability_topic": avail,
+                "source_type": "router",
+                "device": dev,
+                "icon": "mdi:account",
+            }
+            _pub_config(mqtt, f"{prefix}/device_tracker/{obj_id}_person_{label_id}/config", cfg)

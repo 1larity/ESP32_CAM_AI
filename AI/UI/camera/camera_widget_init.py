@@ -158,11 +158,12 @@ def init_camera_widget(self) -> None:
     # Presence logging bus (per camera) with configurable grace period
     face_params = FaceParams.load(str(self.app_cfg.models_dir))
     self._mqtt_topic = (self.cam_cfg.name or "cam").replace(" ", "_")
+    mqtt_publish = bool(getattr(self.cam_cfg, "mqtt_publish", True))
     self._presence = PresenceBus(
         self.cam_cfg.name,
         self.app_cfg.logs_dir,
         ttl_ms=getattr(face_params, "presence_ttl_ms", 6000),
-        mqtt=self._mqtt,
+        mqtt=self._mqtt if mqtt_publish else None,
         mqtt_topic=self._mqtt_topic,
     )
     # Configure unknown capture flags

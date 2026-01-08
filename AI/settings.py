@@ -26,6 +26,7 @@ class CameraSettings:
     user: Optional[str] = None
     password: Optional[str] = None
     token: Optional[str] = None
+    mqtt_publish: bool = True
     alt_streams: list[str] = field(default_factory=list)  # optional alternates (e.g., substreams /102)
     view_scale: float = 1.0           # persisted zoom level
     # Per-camera recording overrides (fallback to app defaults if None)
@@ -94,6 +95,9 @@ class AppSettings:
     mqtt_keepalive: int = 60
     mqtt_base_topic: str = "esp32_cam_ai"
     mqtt_discovery_prefix: str = "homeassistant"
+    # If True, discovery configs are published under mqtt_base_topic (legacy).
+    # If False, discovery configs are published to mqtt_discovery_prefix directly (Home Assistant default).
+    mqtt_discovery_under_base_topic: bool = False
     mqtt_user: Optional[str] = None
     # mqtt_password is kept in memory only; persisted as mqtt_password_enc
     mqtt_password: Optional[str] = None
@@ -117,6 +121,7 @@ def load_settings() -> AppSettings:
                     user=c.get("user"),
                     password=pwd,
                     token=c.get("token"),
+                    mqtt_publish=bool(c.get("mqtt_publish", True)),
                     alt_streams=c.get("alt_streams", []) or [],
                     view_scale=float(c.get("view_scale", 1.0) or 1.0),
                     # flash fields removed
@@ -168,6 +173,7 @@ def load_settings() -> AppSettings:
             mqtt_keepalive=int(raw.get("mqtt_keepalive", 60)),
             mqtt_base_topic=raw.get("mqtt_base_topic", "esp32_cam_ai"),
             mqtt_discovery_prefix=raw.get("mqtt_discovery_prefix", "homeassistant"),
+            mqtt_discovery_under_base_topic=bool(raw.get("mqtt_discovery_under_base_topic", False)),
             mqtt_user=raw.get("mqtt_user"),
             mqtt_password=decrypt(raw.get("mqtt_password_enc", "") or "")[1] if raw.get("mqtt_password_enc") else None,
         )
@@ -221,6 +227,7 @@ def save_settings(cfg: AppSettings):
         "mqtt_keepalive": cfg.mqtt_keepalive,
         "mqtt_base_topic": cfg.mqtt_base_topic,
         "mqtt_discovery_prefix": cfg.mqtt_discovery_prefix,
+        "mqtt_discovery_under_base_topic": cfg.mqtt_discovery_under_base_topic,
         "mqtt_user": cfg.mqtt_user,
         "mqtt_password_enc": encrypt(cfg.mqtt_password) if cfg.mqtt_password else None,
         "cameras": [],

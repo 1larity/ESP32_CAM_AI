@@ -53,6 +53,7 @@ class AddIpCameraDialog(QtWidgets.QDialog):
             name = ip
 
         cam = CameraSettings.from_ip(name=name, host=ip, user=user, password=pw, token=token)
+        cam.record_motion = False
         self._camera = cam
         self.accept()
 

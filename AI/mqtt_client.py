@@ -134,24 +134,49 @@ class MqttService:
     # Publish helper
     # ------------------------------------------------------------------ #
 
-    def publish(self, topic: str, payload: str | bytes, retain: bool = False, qos: int = 0) -> None:
-        with self._lock:
-            if not self.client or not self.connected:
+    def _publish_full_locked(self, full_topic: str, payload: str | bytes, *, retain: bool, qos: int) -> None:
+        if not self.client or not self.connected:
+            return
+        full = str(full_topic).strip().lstrip("/")
+        if not full:
+            return
+        try:
+            payload_bytes = (
+                bytes(payload)
+                if isinstance(payload, (bytes, bytearray))
+                else str(payload).encode("utf-8")
+            )
+            key = (full, bool(retain), int(qos))
+            if self._last_published.get(key) == payload_bytes:
                 return
-            try:
-                full = f"{self._base_topic}/{topic.lstrip('/')}"
-                payload_bytes = (
-                    bytes(payload)
-                    if isinstance(payload, (bytes, bytearray))
-                    else str(payload).encode("utf-8")
-                )
-                key = (full, bool(retain), int(qos))
-                if self._last_published.get(key) == payload_bytes:
-                    return
-                self.client.publish(full, payload=payload, qos=int(qos), retain=retain)
-                self._last_published[key] = payload_bytes
-            except Exception as e:
-                print(f"[MQTT] publish error on {topic}: {e}")
+            self.client.publish(full, payload=payload, qos=int(qos), retain=retain)
+            self._last_published[key] = payload_bytes
+        except Exception as e:
+            print(f"[MQTT] publish error on {full}: {e}")
+
+    def publish(self, topic: str, payload: str | bytes, retain: bool = False, qos: int = 0) -> None:
+        """Publish under the configured base topic (`mqtt_base_topic`)."""
+        with self._lock:
+            full = f"{self._base_topic}/{str(topic).lstrip('/')}"
+            self._publish_full_locked(full, payload, retain=retain, qos=int(qos))
+
+    def publish_absolute(self, full_topic: str, payload: str | bytes, retain: bool = False, qos: int = 0) -> None:
+        """Publish to an absolute MQTT topic (no `mqtt_base_topic` prefix)."""
+        with self._lock:
+            self._publish_full_locked(str(full_topic), payload, retain=retain, qos=int(qos))
+
+    def publish_discovery_config(self, topic: str, payload: str | bytes, retain: bool = True, qos: int = 0) -> None:
+        """
+        Publish a Home Assistant MQTT Discovery config payload.
+
+        When `mqtt_discovery_under_base_topic` is enabled, publishes under `mqtt_base_topic`
+        (legacy behaviour). Otherwise publishes to `mqtt_discovery_prefix` directly (HA default).
+        """
+        under_base = bool(getattr(self.cfg, "mqtt_discovery_under_base_topic", False))
+        if under_base:
+            self.publish(topic, payload, retain=retain, qos=int(qos))
+        else:
+            self.publish_absolute(topic, payload, retain=retain, qos=int(qos))
 
     def add_on_connect(self, cb: Callable[["MqttService"], None]) -> None:
         with self._lock:
