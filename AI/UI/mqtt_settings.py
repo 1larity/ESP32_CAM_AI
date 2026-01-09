@@ -81,13 +81,13 @@ class MqttSettingsDialog(QtWidgets.QDialog):
         form.addRow("Password (leave blank to keep)", self.edit_pass)
         form.addRow(self.chk_clear_password)
 
-        info = QtWidgets.QLabel(
-            "Password is stored encrypted locally (not synced). "
-            "Leave password blank to keep the existing one, or tick 'Clear' to remove.\n\n"
-            "Home Assistant tip: keep Discovery prefix as 'homeassistant' and keep "
-            "'Publish discovery under base topic' off."
-        )
-        info.setWordWrap(True)
+        # info = QtWidgets.QLabel(
+        #     "Password is stored encrypted locally (not synced). "
+        #     "Leave password blank to keep the existing one, or tick 'Clear' to remove.\n\n"
+        #     "Home Assistant tip: keep Discovery prefix as 'homeassistant' and keep "
+        #     "'Publish discovery under base topic' off."
+        # )
+        # info.setWordWrap(True)
 
         btns = QtWidgets.QDialogButtonBox(
             QtWidgets.QDialogButtonBox.StandardButton.Save
@@ -98,7 +98,7 @@ class MqttSettingsDialog(QtWidgets.QDialog):
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.addLayout(form)
-        layout.addWidget(info)
+        #layout.addWidget(info)
         layout.addWidget(btns)
 
     def _reset_discovery_defaults(self) -> None:

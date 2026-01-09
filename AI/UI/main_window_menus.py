@@ -17,11 +17,6 @@ def build_menus(win: "MainWindow") -> None:
 
     # File
     m_file = menubar.addMenu("File")
-    act_add_ip = m_file.addAction("Add Camera by IP…")
-    act_add_ip.triggered.connect(win._add_camera_ip_dialog)
-    act_add_url = m_file.addAction("Add Camera by URL…")
-    act_add_url.triggered.connect(win._add_camera_url_dialog)
-    m_file.addSeparator()
     act_save = m_file.addAction("Save Settings")
     act_save.triggered.connect(lambda: save_settings(win.app_cfg))
     m_file.addSeparator()

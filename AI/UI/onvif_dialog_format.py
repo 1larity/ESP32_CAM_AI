@@ -9,7 +9,9 @@ def format_onvif_label(info: dict) -> str:
     return f"{name} | {stream} | profiles:{profile_count} | {auth}"
 
 
-def render_onvif_details(info: dict) -> str:
+def render_onvif_details(
+    info: dict, *, show_errors: bool = True, show_fallbacks: bool = True
+) -> str:
     parts = []
     parts.append(f"IP: {info.get('ip')}")
     parts.append(f"XAddr: {info.get('xaddr')}")
@@ -30,20 +32,21 @@ def render_onvif_details(info: dict) -> str:
                 prof_lines.append(f"- {p}")
         parts.append("Profiles:\n" + "\n".join(prof_lines))
     parts.append(f"Stream URI: {info.get('stream_uri') or '<none>'}")
-    if info.get("error"):
-        parts.append(f"Error: {info.get('error')}")
-    errs = info.get("errors") or []
-    if errs:
-        parts.append("Errors:")
-        parts.extend(f"- {e}" for e in errs)
+    if show_errors:
+        if info.get("error"):
+            parts.append(f"Error: {info.get('error')}")
+        errs = info.get("errors") or []
+        if errs:
+            parts.append("Errors:")
+            parts.extend(f"- {e}" for e in errs)
     if info.get("auth_required"):
         parts.append("Auth required: yes")
-    fallbacks = info.get("fallback_urls") or []
-    if fallbacks:
-        parts.append("Fallback RTSP guesses:")
-        parts.extend(f"- {u}" for u in fallbacks)
+    if show_fallbacks:
+        fallbacks = info.get("fallback_urls") or []
+        if fallbacks:
+            parts.append("Fallback RTSP guesses:")
+            parts.extend(f"- {u}" for u in fallbacks)
     return "\n".join(parts)
 
 
 __all__ = ["format_onvif_label", "render_onvif_details"]
-

@@ -20,7 +20,7 @@ class EnrollDialog(QtWidgets.QDialog):
         self.ctrl = EnrollmentController()
 
         self.setWindowTitle("Enroll faces / pets")
-        self.resize(480, 320)
+        self.resize(480, 120)
 
         self._build_ui()
         self._wire_signals()

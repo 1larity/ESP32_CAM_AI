@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Optional
 
 from PySide6 import QtWidgets
@@ -28,9 +29,42 @@ def attach_video_stream_handlers(cls) -> None:
             variants.append((label, url))
 
         current = getattr(self.cam_cfg, "stream_url", None)
+        is_onvif = bool(getattr(self.cam_cfg, "is_onvif", False))
+
+        # For ONVIF cameras, prefer only the well-known channel variants (main/sub)
+        # to avoid presenting lots of guessed/invalid RTSP URLs in the picker.
+        if is_onvif and current:
+            m = re.search(r"(/Streaming/Channels/)(\d+)", current)
+            if m:
+                chan = m.group(2)
+                if len(chan) >= 3:
+                    base = chan[:-2]
+                    main_id = f"{base}01"
+                    sub_id = f"{base}02"
+                    main_url = re.sub(
+                        r"(/Streaming/Channels/)(\d+)",
+                        lambda mm: mm.group(1) + main_id,
+                        current,
+                        count=1,
+                    )
+                    sub_url = re.sub(
+                        r"(/Streaming/Channels/)(\d+)",
+                        lambda mm: mm.group(1) + sub_id,
+                        current,
+                        count=1,
+                    )
+                    add(main_url, f"Main ({main_id})")
+                    add(sub_url, f"Sub ({sub_id})")
+                    return variants
+
         add(current, "Primary")
 
         for u in getattr(self.cam_cfg, "alt_streams", []) or []:
+            # When the primary is a /Streaming/Channels URL, hide unrelated guessed
+            # fallbacks (e.g., /live/ch0) from the picker.
+            if is_onvif and current and ("/Streaming/Channels/" in current):
+                if "/Streaming/Channels/" not in (u or ""):
+                    continue
             add(u, "Alt")
 
         # Heuristic variants for common ONVIF/RTSP layouts
@@ -39,7 +73,6 @@ def attach_video_stream_handlers(cls) -> None:
                 ("/101", "/102"),
                 ("/102", "/101"),
                 ("/Streaming/Channels/101", "/Streaming/Channels/102"),
-                ("/Streaming/Channels/1", "/Streaming/Channels/2"),
                 ("/live/ch0", "/live/ch1"),
                 ("/ch0", "/ch1"),
             ]

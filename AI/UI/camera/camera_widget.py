@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from typing import Optional
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
 import requests
 
 from PySide6 import QtCore, QtGui, QtWidgets
@@ -108,30 +108,126 @@ class CameraWidget(QtWidgets.QWidget):
     # Info dialog
     # ------------------------------------------------------------------ #
 
+    def _extract_url_credentials(self) -> tuple[str | None, str | None]:
+        user = getattr(self.cam_cfg, "user", None) or None
+        pwd = getattr(self.cam_cfg, "password", None) or None
+        if user and pwd:
+            return user, pwd
+        parsed = urlparse(self.cam_cfg.effective_url())
+        if not user:
+            user = parsed.username or None
+        if not pwd:
+            pwd = parsed.password or None
+        return user, pwd
+
+    @staticmethod
+    def _redact_url_for_display(url: str) -> str:
+        """
+        Strip embedded credentials and redact sensitive query params (e.g., token)
+        for display in dialogs.
+        """
+        try:
+            parsed = urlparse(url)
+        except Exception:
+            return url
+        if not parsed.scheme or not parsed.netloc:
+            return url
+
+        host = parsed.hostname or ""
+        netloc = host
+        if parsed.port:
+            netloc = f"{netloc}:{parsed.port}"
+
+        query = parsed.query or ""
+        if query:
+            qs = parse_qs(query, keep_blank_values=True)
+            redacted: dict[str, list[str]] = {}
+            for k, vals in qs.items():
+                if k.lower() in {"token", "password", "pwd", "pass"}:
+                    redacted[k] = ["***" for _ in vals]
+                else:
+                    redacted[k] = vals
+            query = urlencode(redacted, doseq=True)
+
+        out = f"{parsed.scheme}://{netloc}{parsed.path or ''}"
+        if query:
+            out = f"{out}?{query}"
+        return out
+
+    def _looks_like_esp32_cam_stream(self) -> bool:
+        """
+        Heuristic: ESP32-CAM default stream is http://<host>:81/stream.
+        """
+        parsed = urlparse(self.cam_cfg.effective_url())
+        if parsed.scheme not in ("http", "https"):
+            return False
+        if parsed.port != 81:
+            return False
+        return (parsed.path or "").rstrip("/") == "/stream"
+
     def _api_status_url(self) -> str | None:
         """
         Build the API status URL for this camera based on its stream URL.
         Defaults to http://<host>:80/api/status.
         """
+        if not self._looks_like_esp32_cam_stream():
+            return None
         parsed = urlparse(self.cam_cfg.effective_url())
         host = parsed.hostname
         if not host:
             return None
-        port = 80
-        return f"http://{host}:{port}/api/status"
+        params: dict[str, str] = {}
+        token = getattr(self.cam_cfg, "token", None) or None
+        if not token:
+            qs = parse_qs(parsed.query or "")
+            token_vals = qs.get("token") or []
+            token = token_vals[0] if token_vals else None
+        if token:
+            params["token"] = token
+        url = f"http://{host}:80/api/status"
+        if params:
+            url = f"{url}?{urlencode(params)}"
+        return url
 
     def _show_info(self) -> None:
-        url = self._api_status_url()
-        if not url:
-            QtWidgets.QMessageBox.warning(
-                self, "Camera Info", "Cannot determine API URL for this camera."
-            )
+        if bool(getattr(self.cam_cfg, "is_onvif", False)):
+            self._show_info_onvif()
             return
+        url = self._api_status_url()
+        if url:
+            self._show_info_esp32(url)
+            return
+        self._show_info_generic()
 
+    def _show_info_generic(self) -> None:
+        parsed = urlparse(self.cam_cfg.effective_url())
+        user, pwd = self._extract_url_credentials()
+        alt = getattr(self.cam_cfg, "alt_streams", None) or []
+        typ = "ONVIF" if bool(getattr(self.cam_cfg, "is_onvif", False)) else "Stream"
+        text = (
+            f"Name: {self.cam_cfg.name}\n"
+            f"Type: {typ}\n"
+            f"URL: {self._redact_url_for_display(self.cam_cfg.effective_url())}\n"
+            f"Host: {parsed.hostname or 'n/a'}\n"
+            f"Port: {parsed.port or 'n/a'}\n"
+            f"User: {user or '<none>'}\n"
+            f"Password: {'<set>' if pwd else '<none>'}\n"
+            f"Alt streams: {len(alt)}"
+        )
+        dlg = QtWidgets.QMessageBox(self)
+        dlg.setWindowTitle(f"Camera Info - {self.cam_cfg.name}")
+        dlg.setIcon(QtWidgets.QMessageBox.Icon.Information)
+        dlg.setText(text)
+        dlg.setStandardButtons(QtWidgets.QMessageBox.StandardButton.Ok)
+        dlg.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
+        dlg.exec()
+
+    def _show_info_esp32(self, url: str) -> None:
         try:
             auth = None
-            if self.cam_cfg.user and self.cam_cfg.password:
-                auth = requests.auth.HTTPBasicAuth(self.cam_cfg.user, self.cam_cfg.password)
+            user, pwd = self._extract_url_credentials()
+            if user and pwd:
+                auth = requests.auth.HTTPBasicAuth(user, pwd)
             resp = requests.get(url, auth=auth, timeout=3)
             resp.raise_for_status()
             data = resp.json()
@@ -155,6 +251,69 @@ class CameraWidget(QtWidgets.QWidget):
             f"Framesize: {fs_name} (code {fs_code})\n"
             f"Pixels: {fs_w if fs_w else 'n/a'} x {fs_h if fs_h else 'n/a'}\n"
             f"PTZ: pan={pan}, tilt={tilt}"
+        )
+
+        dlg = QtWidgets.QMessageBox(self)
+        dlg.setWindowTitle(f"Camera Info - {self.cam_cfg.name}")
+        dlg.setIcon(QtWidgets.QMessageBox.Icon.Information)
+        dlg.setText(text)
+        dlg.setStandardButtons(QtWidgets.QMessageBox.StandardButton.Ok)
+        dlg.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
+        dlg.exec()
+
+    def _show_info_onvif(self) -> None:
+        from onvif import OnvifDiscoveryResult, discover_onvif
+        from onvif.enrichment import enrich_onvif_device
+        from UI.onvif_dialog_format import render_onvif_details
+
+        parsed = urlparse(self.cam_cfg.effective_url())
+        host = parsed.hostname
+        if not host:
+            QtWidgets.QMessageBox.warning(
+                self, "Camera Info", "Cannot determine host for this camera."
+            )
+            return
+
+        user, pwd = self._extract_url_credentials()
+
+        res: OnvifDiscoveryResult | None = None
+        info: dict | None = None
+        discovery_error: str | None = None
+        try:
+            hits = discover_onvif(timeout=1.5, retries=1)
+            res = next((h for h in hits if h.ip == host or h.host == host), None)
+        except Exception as e:
+            discovery_error = str(e)
+
+        if res is None:
+            # Fallback: common device-service path if WS-Discovery is blocked.
+            res = OnvifDiscoveryResult(
+                xaddr=f"http://{host}/onvif/device_service",
+                epr=None,
+                scopes=[],
+                ip=host,
+            )
+
+        try:
+            info = enrich_onvif_device(res, user, pwd)
+        except Exception as e:
+            info = {
+                "ip": host,
+                "xaddr": getattr(res, "xaddr", None),
+                "media_xaddr": None,
+                "name": getattr(self.cam_cfg, "name", host),
+                "model": None,
+                "firmware": None,
+                "profiles": [],
+                "stream_uri": None,
+                "auth_required": False,
+                "errors": [f"onvif: {e}"],
+                "fallback_urls": [],
+            }
+
+        text = (
+            f"Configured stream URL: {self._redact_url_for_display(self.cam_cfg.effective_url())}\n\n"
+            f"{render_onvif_details(info, show_errors=False, show_fallbacks=False)}"
         )
 
         dlg = QtWidgets.QMessageBox(self)

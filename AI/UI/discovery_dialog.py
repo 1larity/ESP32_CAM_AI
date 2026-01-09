@@ -65,11 +65,11 @@ class DiscoveryDialog(QtWidgets.QDialog):
         self.list.itemSelectionChanged.connect(self._on_selection)
         self.list.itemDoubleClicked.connect(self._on_add_selected)
 
-        self.lbl_help = QtWidgets.QLabel(
-            "Checks only /api/status on port 80.\n"
-            "401 Unauthorized is treated as a hit (device is present but locked).\n"
-            "Concurrent worker pool scan for speed."
-        )
+        # self.lbl_help = QtWidgets.QLabel(
+        #     "Checks only /api/status on port 80.\n"
+        #     "401 Unauthorized is treated as a hit (device is present but locked).\n"
+        #     "Concurrent worker pool scan for speed."
+        # )
         self.lbl_progress = QtWidgets.QLabel("Idle")
 
         self.pb = QtWidgets.QProgressBar()
@@ -97,7 +97,7 @@ class DiscoveryDialog(QtWidgets.QDialog):
         lay = QtWidgets.QVBoxLayout(self)
         lay.addLayout(form)
         lay.addLayout(btns)
-        lay.addWidget(self.lbl_help)
+       # lay.addWidget(self.lbl_help)
         lay.addWidget(self.lbl_progress)
         lay.addWidget(self.pb)
         lay.addWidget(self.list)

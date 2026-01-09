@@ -9,7 +9,7 @@
   "yolo_url": null,
   "haar_url": null,
   "face_model": "C:\\Users\\stellaris\\Documents\\PlatformIO\\Projects\\ESP32_CAM_AI\\AI\\models\\face_yunet.onnx",
-  "window_geometry": "01d9d0cb00030000fffff60100000003fffffd7c00000437fffff60100000022fffffd7c0000043700000001000000000a00fffff60100000022fffffd7c00000437",
+  "window_geometry": "01d9d0cb0003000000000add00000034000012580000046800000add00000053000012580000046800000002000000000a0000000add000000530000125800000468",
   "window_state": "000000ff00000000fd00000001000000010000011b00000400fc0200000001fb00000014006500760065006e007400730044006f0063006b0100000016000004000000009100ffffff0000065d0000040000000004000000040000000800000008fc00000000",
   "window_geometries": {
     "Cam-2": [
@@ -64,7 +64,7 @@
   "mqtt_discovery_prefix": "homeassistant",
   "mqtt_discovery_under_base_topic": false,
   "mqtt_user": "homeassistant",
-  "mqtt_password_enc": "HxN4uOPkmH3otHAp/PwYymct+H5nIqRHJ5ByItCNwP+cOFAJa06NnMe6V+3TSky65PovwzY=",
+  "mqtt_password_enc": "qSUdDKoR6geZC6aARgqPh6FA5F7vZsAbWm7itPf7s3Ii5x86LwlDg8BrvuHlpbZM3yzNsmw=",
   "cameras": [
     {
       "name": "Cam-2",
@@ -86,7 +86,7 @@
       "rotation_deg": 0,
       "flip_horizontal": false,
       "flip_vertical": false,
-      "password_enc": "nf8h3O2wEk/bavFXcefVjkDhyaFCTKm8z8RvJ0+W42+R93zwKBt//wn0gdeGcob5S3XNCpI="
+      "password_enc": "ymBWYnRt5XKiWmqjpyC7MoowVpynokMzllmCmhdkGZzJQg60itw5WZENDmIHAW3ilEo71vg="
     },
     {
       "name": "Cam-1",
@@ -108,7 +108,7 @@
       "rotation_deg": 0,
       "flip_horizontal": false,
       "flip_vertical": false,
-      "password_enc": "cY5PYAKdoD03ka6IyYcD2EXNS3qjMPeOcd/AZi165hKvVSzNE63t68iZuXyyA3lwqFwLzO0="
+      "password_enc": "1XHMc9+N6tX+ZVvrxLtVY8DTTdUdhbJv+uDU1g4X2Zp/58HkLdKCM2TOvBsiQeaVHSxgql0="
     },
     {
       "name": "Cam-3",
@@ -137,7 +137,7 @@
       "rotation_deg": 0,
       "flip_horizontal": false,
       "flip_vertical": true,
-      "password_enc": "BSyXT/cGBIzx/s+kMNQO83uyonKpTJdl0DxwpHWJr6u5VHCJ+7tUwV90QSf7L5TrlpRvuA=="
+      "password_enc": "gueTAoAxeB+WY6VHt0xdx3s4RJXLtCC3IX2H1Lx3w0xCcoNGhsJejGZdjeKIftcZE5xVNw=="
     },
     {
       "name": "Cam-4",
@@ -165,7 +165,7 @@
       "rotation_deg": 180,
       "flip_horizontal": false,
       "flip_vertical": false,
-      "password_enc": "cI2cl+8GsY5pdlIEb/UR3OCzyHI7e3ZS22TzaFTzWVlaJGJ4IgHxl2+7ZB6NGwu47ciCXA=="
+      "password_enc": "rIZ6Ndt+hHCR09DXqtFxk7OczTNW9NsDBf3OEP7FvLFF+sZ43DssePFz6FQZoH0dPl8j+A=="
     }
   ]
 }
