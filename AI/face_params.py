@@ -11,6 +11,7 @@ class FaceParams:
     eq_hist: bool = True           # apply cv.equalizeHist on ROI
     min_face_px: int = 96          # ignore faces smaller than this
     smooth_n: int = 3              # EMA for displayed score/conf
+    show_box_size: bool = False    # show face box WxH overlay label
     presence_ttl_ms: int = 6000    # Grace period for presence enter/exit
 
     @staticmethod

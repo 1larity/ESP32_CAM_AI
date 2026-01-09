@@ -45,6 +45,10 @@ class FaceRecTunerDialog(QtWidgets.QDialog):
         self.cb_eq.setChecked(self.params.eq_hist)
         layout.addRow(self.cb_eq)
 
+        self.cb_box = QtWidgets.QCheckBox("Show face box size label (WxH)")
+        self.cb_box.setChecked(bool(getattr(self.params, "show_box_size", False)))
+        layout.addRow(self.cb_box)
+
         btns = QtWidgets.QDialogButtonBox(
             QtWidgets.QDialogButtonBox.StandardButton.Save
             | QtWidgets.QDialogButtonBox.StandardButton.Cancel
@@ -75,6 +79,7 @@ class FaceRecTunerDialog(QtWidgets.QDialog):
         self.params.roi_size = int(self.s_roi.value())
         self.params.min_face_px = int(self.s_min.value())
         self.params.eq_hist = bool(self.cb_eq.isChecked())
+        self.params.show_box_size = bool(self.cb_box.isChecked())
         self.params.save(self.models_dir)
 
     def _wrap_slider(self, slider: QtWidgets.QSlider) -> QtWidgets.QWidget:

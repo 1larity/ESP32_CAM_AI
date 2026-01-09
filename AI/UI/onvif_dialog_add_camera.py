@@ -62,6 +62,7 @@ def build_camera_settings_from_selection(
         name=name,
         stream_url=stream,
         alt_streams=alt_streams,
+        is_onvif=True,
         user=user or None,
         password=pwd or None,
         record_motion=False,

@@ -91,6 +91,14 @@ def attach_video_stream_handlers(cls) -> None:
         self._last_bgr = None
         self._last_pkt = None
         self._overlay_cache_dirty = True
+        # Only allow per-session overlay text sizing to be recalculated when the
+        # user explicitly swaps streams on an ONVIF camera.
+        if bool(getattr(self.cam_cfg, "is_onvif", False)):
+            try:
+                self._overlay_text_px = None
+                self._overlay_text_px_set = False
+            except Exception:
+                pass
         self._capture.start()
         if hasattr(self, "_frame_timer"):
             self._frame_timer.start()
@@ -101,4 +109,3 @@ def attach_video_stream_handlers(cls) -> None:
     cls._rebuild_stream_menu = _rebuild_stream_menu
     cls._apply_stream_url = _apply_stream_url
     cls._prompt_custom_stream = _prompt_custom_stream
-

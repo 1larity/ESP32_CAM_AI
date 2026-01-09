@@ -6,6 +6,7 @@ from typing import Optional, Tuple
 
 import numpy as np
 
+from face_params import FaceParams
 from utils import monotonic_ms
 from .config import DetectorConfig
 from .core import run_yolo
@@ -78,6 +79,11 @@ class DetectorEngine:
             cuda_ok=cuda_ok,
         )
 
+        # Face-tuning params (face_recog.json)
+        self._face_params_mtime = self._face_params_mtime_ns()
+        self._min_face_px = 0
+        self._reload_face_params()
+
         if self.cfg.use_lbph:
             self._rec, self._labels = load_lbph(self.models_dir)
             self._lbph_mtime = self._lbph_models_mtime()
@@ -112,10 +118,42 @@ class DetectorEngine:
         except Exception:
             return 0
 
+    def _face_params_mtime_ns(self) -> int:
+        try:
+            p = os.path.join(self.models_dir, "face_recog.json")
+            return int(os.stat(p).st_mtime_ns)
+        except Exception:
+            return 0
+
+    def _reload_face_params(self) -> None:
+        try:
+            params = FaceParams.load(self.models_dir)
+            self._min_face_px = max(0, int(getattr(params, "min_face_px", 0) or 0))
+        except Exception:
+            self._min_face_px = 0
+
+    def _maybe_reload_face_params(self) -> None:
+        try:
+            mtime = self._face_params_mtime_ns()
+            prev = int(getattr(self, "_face_params_mtime", 0) or 0)
+            if mtime != prev:
+                self._face_params_mtime = mtime
+                self._reload_face_params()
+        except Exception:
+            pass
+
     def _maybe_reload_lbph(self) -> None:
         try:
             mtime = self._lbph_models_mtime()
-            if mtime > int(getattr(self, "_lbph_mtime", 0) or 0):
+            prev = int(getattr(self, "_lbph_mtime", 0) or 0)
+            # If the model files were deleted (e.g., user purged all samples),
+            # clear any in-memory recogniser so we don't keep predicting stale labels.
+            if mtime == 0 and prev > 0:
+                self._rec, self._labels = None, {}
+                self._lbph_mtime = 0
+                print(f"[Detector:{self.name}] cleared LBPH models (files removed)")
+                return
+            if mtime > prev:
                 self._rec, self._labels = load_lbph(self.models_dir)
                 self._lbph_mtime = mtime
                 print(f"[Detector:{self.name}] reloaded LBPH models (labels={len(self._labels)})")
@@ -166,11 +204,13 @@ class DetectorEngine:
             # Hot-reload LBPH if models changed on disk (e.g., purge / image manager / auto-train).
             if self.cfg.use_lbph:
                 self._maybe_reload_lbph()
+            self._maybe_reload_face_params()
             face_boxes, t_faces = run_faces_dnn(
                 bgr,
                 self._face_dnn,
                 self._rec if self.cfg.use_lbph else None,
                 self._labels if self.cfg.use_lbph else {},
+                min_face_px=int(getattr(self, "_min_face_px", 0) or 0),
             )
             pkt.faces.extend(face_boxes)
             pkt.timing_ms["faces_core"] = t_faces
@@ -178,7 +218,14 @@ class DetectorEngine:
             # Hot-reload LBPH if models changed on disk (e.g., auto-train/unknowns)
             if self.cfg.use_lbph:
                 self._maybe_reload_lbph()
-            face_boxes, t_faces = run_faces(bgr, self._face, self._rec, self._labels)
+            self._maybe_reload_face_params()
+            face_boxes, t_faces = run_faces(
+                bgr,
+                self._face,
+                self._rec,
+                self._labels,
+                min_face_px=int(getattr(self, "_min_face_px", 0) or 0),
+            )
             pkt.faces.extend(face_boxes)
             pkt.timing_ms["faces_core"] = t_faces
 
@@ -187,4 +234,3 @@ class DetectorEngine:
         pkt.timing_ms["faces"] = int(t2 - t1)
 
         return pkt, yolo_skipped, t2
-

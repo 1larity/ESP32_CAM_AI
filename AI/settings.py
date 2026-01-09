@@ -28,6 +28,8 @@ class CameraSettings:
     token: Optional[str] = None
     mqtt_publish: bool = True
     alt_streams: list[str] = field(default_factory=list)  # optional alternates (e.g., substreams /102)
+    is_onvif: bool = False          # controls ONVIF-only UI (stream selection)
+    overlay_text_pct: float = 4.0   # overlay text size as % of video height
     view_scale: float = 1.0           # persisted zoom level
     # Per-camera recording overrides (fallback to app defaults if None)
     record_motion: Optional[bool] = None
@@ -123,6 +125,14 @@ def load_settings() -> AppSettings:
                     token=c.get("token"),
                     mqtt_publish=bool(c.get("mqtt_publish", True)),
                     alt_streams=c.get("alt_streams", []) or [],
+                    is_onvif=bool(
+                        c.get("is_onvif", False)
+                        or (
+                            (c.get("alt_streams", []) or [])
+                            and str(c.get("stream_url", "") or "").startswith("rtsp://")
+                        )
+                    ),
+                    overlay_text_pct=float(c.get("overlay_text_pct", 4.0) or 4.0),
                     view_scale=float(c.get("view_scale", 1.0) or 1.0),
                     # flash fields removed
                     record_motion=c.get("record_motion", raw.get("record_motion")),

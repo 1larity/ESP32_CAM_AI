@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 import time
 from typing import Tuple
 
@@ -26,6 +27,8 @@ def _ensure_overlay_cache(self, w: int, h: int) -> None:
         self._overlay_cache_dirty = True
         self._hud_cache_next_ms = 0
         self._stats_cache_next_ms = 0
+        self._overlay_text_px = None
+        self._overlay_text_px_set = False
 
     new_size = QtCore.QSize(w, h)
     if self._overlay_cache_pixmap is None or self._overlay_cache_pixmap.size() != new_size:
@@ -50,6 +53,27 @@ def _ensure_overlay_cache(self, w: int, h: int) -> None:
                 self.cam_cfg.overlay_scale = float(self._overlay_scale)
             except Exception:
                 pass
+
+    # Set text size once per stream based on video height.
+    # Do not recalculate during the session unless explicitly reset (e.g., ONVIF stream swap).
+    if not hasattr(self, "_overlay_text_px"):
+        self._overlay_text_px = None
+    if not hasattr(self, "_overlay_text_px_set"):
+        self._overlay_text_px_set = False
+    if not self._overlay_text_px_set and h > 0:
+        pct = getattr(self.cam_cfg, "overlay_text_pct", 4.0)
+        try:
+            pct = float(pct)
+        except Exception:
+            pct = 4.0
+        # Guardrails: keep within a sane UI range.
+        pct = max(1.0, min(12.0, pct))
+        try:
+            self._overlay_text_px = max(8, int(round(float(h) * (pct / 100.0))))
+            self._overlay_text_px_set = True
+        except Exception:
+            self._overlay_text_px = None
+            self._overlay_text_px_set = False
 
 
 def _invalidate_overlay_cache(self) -> None:
@@ -84,7 +108,16 @@ def compute_overlay_cache_key(self, pkt, w: int, h: int, now_ms: int) -> tuple:
             )
             self._overlay_cache_dirty = True
 
-    return (w, h, toggles_key, pkt_key, hud_sec, stats_tick)
+    # Face params (face_recog.json) may affect overlay rendering (e.g., showing box sizes).
+    face_params_mtime = 0
+    try:
+        models_dir = getattr(getattr(self, "app_cfg", None), "models_dir", None)
+        if models_dir:
+            face_params_mtime = int((Path(models_dir) / "face_recog.json").stat().st_mtime_ns)
+    except Exception:
+        face_params_mtime = 0
+
+    return (w, h, toggles_key, pkt_key, hud_sec, stats_tick, face_params_mtime)
 
 
 __all__ = [
@@ -93,4 +126,3 @@ __all__ = [
     "_invalidate_overlay_cache",
     "compute_overlay_cache_key",
 ]
-

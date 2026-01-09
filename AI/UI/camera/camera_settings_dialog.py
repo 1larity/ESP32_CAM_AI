@@ -68,6 +68,9 @@ class CameraSettingsDialog(QtWidgets.QDialog):
         current_url = getattr(cam_cfg, "stream_url", "") or ""
         if current_url.startswith(("rtsp://", "http://", "https://")):
             show_stream = len(self._stream_variants) > 1 or bool(getattr(cam_cfg, "alt_streams", None))
+        # Stream selection UI is ONVIF-only.
+        if show_stream and not bool(getattr(cam_cfg, "is_onvif", False)):
+            show_stream = False
 
         if show_stream:
             self.cb_stream = QtWidgets.QComboBox()
@@ -136,6 +139,20 @@ class CameraSettingsDialog(QtWidgets.QDialog):
         self.cb_overlay_stats = QtWidgets.QCheckBox("Show stats (FPS + counts)")
         self.cb_overlay_stats.setChecked(bool(getattr(widget._overlays, "stats", True)))
         layout.addRow(self.cb_overlay_stats)
+
+        # Overlay text size (per camera)
+        self.s_text_pct = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self.s_text_pct.setRange(1, 12)
+        self.s_text_pct.setTickInterval(1)
+        self.s_text_pct.setTickPosition(QtWidgets.QSlider.TickPosition.TicksBelow)
+        cur_pct = getattr(cam_cfg, "overlay_text_pct", 4.0)
+        try:
+            cur_pct = float(cur_pct)
+        except Exception:
+            cur_pct = 4.0
+        cur_pct = max(1.0, min(12.0, cur_pct))
+        self.s_text_pct.setValue(int(round(cur_pct)))
+        layout.addRow("Overlay text size (% of video height):", self._wrap_slider(self.s_text_pct, width=55))
 
         buttons = QtWidgets.QDialogButtonBox(
             QtWidgets.QDialogButtonBox.StandardButton.Save
@@ -317,6 +334,30 @@ class CameraSettingsDialog(QtWidgets.QDialog):
         self.widget.act_overlay_detections.setChecked(det_on)
         self.widget.act_overlay_hud.setChecked(hud_on)
         self.widget.act_overlay_stats.setChecked(stats_on)
+
+        # Overlay text size (% of video height)
+        try:
+            new_pct = float(self.s_text_pct.value())
+        except Exception:
+            new_pct = 4.0
+        old_pct = getattr(self.cam_cfg, "overlay_text_pct", 4.0)
+        try:
+            old_pct = float(old_pct)
+        except Exception:
+            old_pct = 4.0
+        new_pct = max(1.0, min(12.0, new_pct))
+        if abs(new_pct - old_pct) > 0.01:
+            self.cam_cfg.overlay_text_pct = new_pct
+            try:
+                # Recompute once from current stream resolution on next paint.
+                self.widget._overlay_text_px = None
+                self.widget._overlay_text_px_set = False
+            except Exception:
+                pass
+            try:
+                self.widget._invalidate_overlay_cache()
+            except Exception:
+                pass
 
         # Stream selection (if applicable)
         if hasattr(self, "cb_stream"):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 import time
 
 from PySide6 import QtCore, QtGui
@@ -21,6 +22,24 @@ def _render_overlay_cache(self, pkt, w: int, h: int, now_ms: int) -> None:
     self._overlay_cache_pixmap.fill(QtCore.Qt.GlobalColor.transparent)
     scale = float(getattr(self, "_overlay_scale", 1.0) or 1.0)
 
+    # Face tuner params can affect overlay rendering (e.g., show face box sizes).
+    try:
+        from face_params import FaceParams
+
+        models_dir = getattr(getattr(self, "app_cfg", None), "models_dir", None)
+        if models_dir:
+            fp = Path(models_dir) / "face_recog.json"
+            try:
+                mtime_ns = int(fp.stat().st_mtime_ns)
+            except Exception:
+                mtime_ns = 0
+            if mtime_ns != getattr(self, "_face_params_mtime_ns", None):
+                params = FaceParams.load(str(models_dir))
+                self._face_params_mtime_ns = mtime_ns
+                self._show_face_box_size = bool(getattr(params, "show_box_size", False))
+    except Exception:
+        pass
+
     painter = QtGui.QPainter(self._overlay_cache_pixmap)
     try:
         # Detection overlays (cached)
@@ -35,7 +54,14 @@ def _render_overlay_cache(self, pkt, w: int, h: int, now_ms: int) -> None:
                 # overlays.py may draw HUD; we handle HUD here
                 orig_hud = getattr(self._overlays, "hud", False)
                 self._overlays.hud = False
-                draw_overlays(painter, pkt, self._overlays, scale=scale)
+                draw_overlays(
+                    painter,
+                    pkt,
+                    self._overlays,
+                    scale=scale,
+                    show_face_box_size=bool(getattr(self, "_show_face_box_size", False)),
+                    text_px=getattr(self, "_overlay_text_px", None),
+                )
                 self._overlays.hud = orig_hud
 
         # HUD overlay (cached, updated on cadence by cache invalidation logic)
@@ -98,4 +124,3 @@ def _update_pixmap(self, bgr, pkt) -> None:
 
 
 __all__ = ["_render_overlay_cache", "_update_pixmap"]
-

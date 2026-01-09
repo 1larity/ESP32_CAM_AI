@@ -157,6 +157,7 @@ def init_camera_widget(self) -> None:
     # Presence logging bus (per camera)
     # Presence logging bus (per camera) with configurable grace period
     face_params = FaceParams.load(str(self.app_cfg.models_dir))
+    self._show_face_box_size = bool(getattr(face_params, "show_box_size", False))
     self._mqtt_topic = (self.cam_cfg.name or "cam").replace(" ", "_")
     mqtt_publish = bool(getattr(self.cam_cfg, "mqtt_publish", True))
     self._presence = PresenceBus(

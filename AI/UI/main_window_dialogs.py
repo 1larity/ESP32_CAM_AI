@@ -20,10 +20,10 @@ def _open_enrollment(self) -> None:
 
 
 def _open_image_manager(self) -> None:
-    dlg = ImageManagerDialog(self.app_cfg, self)
+    dlg = ImageManagerDialog(
+        self.app_cfg, self, start_face_rebuild=self._start_face_rebuild
+    )
     dlg.exec()
-    # After image management changes, rebuild LBPH model from disk with progress
-    self._start_face_rebuild("Rebuilding face model after image changes")
 
 
 def _open_discovery(self) -> None:

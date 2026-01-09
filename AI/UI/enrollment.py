@@ -32,13 +32,22 @@ class EnrollDialog(QtWidgets.QDialog):
 
         form = QtWidgets.QFormLayout()
         self.name_edit = QtWidgets.QLineEdit(self)
+        self.cam_combo = QtWidgets.QComboBox(self)
         self.samples_spin = QtWidgets.QSpinBox(self)
         self.samples_spin.setRange(1, 500)
         self.samples_spin.setValue(40)
 
         form.addRow("Name / label", self.name_edit)
+        form.addRow("Camera", self.cam_combo)
         form.addRow("Samples this session", self.samples_spin)
         layout.addLayout(form)
+
+        # Camera selector (None => accept from any camera)
+        self.cam_combo.addItem("All cameras", None)
+        for cam in getattr(self.app_cfg, "cameras", []) or []:
+            name = getattr(cam, "name", None)
+            if name:
+                self.cam_combo.addItem(str(name), str(name))
 
         self.status_label = QtWidgets.QLabel(self)
         self.status_label.setWordWrap(True)
@@ -79,7 +88,10 @@ class EnrollDialog(QtWidgets.QDialog):
             return
 
         total = self.samples_spin.value()
-        self.ctrl.start(name=name, total_samples=total, target_cam=None)
+        target_cam = self.cam_combo.currentData()
+        if target_cam is not None:
+            target_cam = str(target_cam)
+        self.ctrl.start(name=name, total_samples=total, target_cam=target_cam)
 
         self.btn_start.setEnabled(False)
         self.btn_stop.setEnabled(True)

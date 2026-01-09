@@ -24,9 +24,13 @@ def _draw_hud(self, p: QtGui.QPainter) -> None:
 
         p.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255)))
         font = QtGui.QFont(p.font())
-        base_pt = 12
-        scaled_pt = int(round(9 * scale))
-        font.setPointSize(int(max(base_pt, scaled_pt)))
+        font_px = int(getattr(self, "_overlay_text_px", 0) or 0)
+        if font_px > 0:
+            font.setPixelSize(font_px)
+        else:
+            base_pt = 12
+            scaled_pt = int(round(9 * scale))
+            font.setPointSize(int(max(base_pt, scaled_pt)))
         p.setFont(font)
 
         fm = QtGui.QFontMetrics(font)
@@ -61,9 +65,13 @@ def _draw_stats_line(
         )
 
         font = QtGui.QFont(p.font())
-        base_pt = 12
-        scaled_pt = int(round(9 * scale))
-        font.setPointSize(int(max(base_pt, scaled_pt)))
+        font_px = int(getattr(self, "_overlay_text_px", 0) or 0)
+        if font_px > 0:
+            font.setPixelSize(font_px)
+        else:
+            base_pt = 12
+            scaled_pt = int(round(9 * scale))
+            font.setPointSize(int(max(base_pt, scaled_pt)))
         p.setFont(font)
 
         fm = QtGui.QFontMetrics(font)
@@ -109,9 +117,13 @@ def _draw_rec_indicator(self, p: QtGui.QPainter, w: int, h: int) -> None:
 
         p.setPen(QtGui.QPen(QtGui.QColor(255, 230, 230)))
         font = QtGui.QFont(p.font())
-        base_pt = 12
-        scaled_pt = int(round(9 * scale))
-        font.setPointSize(int(max(base_pt, scaled_pt)))
+        font_px = int(getattr(self, "_overlay_text_px", 0) or 0)
+        if font_px > 0:
+            font.setPixelSize(font_px)
+        else:
+            base_pt = 12
+            scaled_pt = int(round(9 * scale))
+            font.setPointSize(int(max(base_pt, scaled_pt)))
         font.setBold(True)
         p.setFont(font)
         p.drawText(
@@ -129,4 +141,3 @@ __all__ = [
     "_draw_stats_line",
     "_draw_rec_indicator",
 ]
-

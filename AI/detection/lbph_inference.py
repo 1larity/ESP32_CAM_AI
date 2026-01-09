@@ -17,6 +17,8 @@ def run_faces(
     cascade: Optional[cv2.CascadeClassifier],
     rec: Optional[object],
     labels: Dict[int, str],
+    *,
+    min_face_px: int = 0,
 ) -> Tuple[List[DetBox], int]:
     """
     Run Haar cascade + optional LBPH recognition.
@@ -35,7 +37,8 @@ def run_faces(
         except Exception:
             eq = cv2.equalizeHist(gray)
 
-        minsz = max(40, int(0.12 * min(gray.shape[:2])))
+        min_px = max(0, int(min_face_px))
+        minsz = max(40, min_px, int(0.12 * min(gray.shape[:2])))
         faces = cascade.detectMultiScale(eq, 1.1, 4, minSize=(minsz, minsz))
 
         for (fx, fy, fw, fh) in faces:
@@ -79,6 +82,8 @@ def run_faces_dnn(
     rec: Optional[object],
     labels: Dict[int, str],
     score_threshold: float = 0.85,
+    *,
+    min_face_px: int = 0,
 ) -> Tuple[List[DetBox], int]:
     """
     Run YuNet (FaceDetectorYN) + optional LBPH recognition.
@@ -98,12 +103,15 @@ def run_faces_dnn(
             return faces_out, int((time.monotonic() - start) * 1000.0)
 
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+        min_px = max(0, int(min_face_px))
         for row in faces:
             x, y, w, h, score = row[:5]
             if score < score_threshold:
                 continue
             x1, y1 = int(x), int(y)
             x2, y2 = int(x + w), int(y + h)
+            if min_px and min((x2 - x1), (y2 - y1)) < min_px:
+                continue
             name = "face"
             conf = float(score)
 
@@ -133,4 +141,3 @@ def run_faces_dnn(
 
 
 __all__ = ["LBPH_DEFAULT_THRESHOLD", "run_faces", "run_faces_dnn"]
-
