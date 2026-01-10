@@ -500,14 +500,45 @@ class CameraWidget(QtWidgets.QWidget):
             )
             return
 
+        has_zoom = False
+        supports_presets = False
+        try:
+            has_zoom = bool(cli.ptz_supports_zoom(profile_token, ptz_xaddr=ptz_xaddr))
+        except Exception as e:
+            debug_ptz(f"{getattr(self.cam_cfg, 'name', '')}: PTZ zoom probe failed: {e}")
+        try:
+            presets = cli.ptz_get_presets(profile_token, ptz_xaddr=ptz_xaddr)
+            supports_presets = bool(presets)
+            if presets:
+                debug_ptz(
+                    f"{getattr(self.cam_cfg, 'name', '')}: PTZ presets supported (count={len(presets)})"
+                )
+            else:
+                debug_ptz(
+                    f"{getattr(self.cam_cfg, 'name', '')}: PTZ presets supported but none configured"
+                )
+        except Exception as e:
+            debug_ptz(f"{getattr(self.cam_cfg, 'name', '')}: PTZ presets unavailable: {e}")
+
         self._ptz_device_xaddr = device_xaddr
         self._ptz_xaddr = ptz_xaddr
         self._ptz_profile_token = profile_token
         self._ptz_profile_tokens = profile_tokens
+        self._ptz_detected_has_zoom = bool(has_zoom)
+        self._ptz_detected_has_presets = bool(supports_presets)
+        self._ptz_has_zoom = bool(has_zoom) and (not bool(getattr(self.cam_cfg, "ptz_disable_zoom", False)))
+        self._ptz_supports_presets = bool(supports_presets) and (
+            not bool(getattr(self.cam_cfg, "ptz_disable_presets", False))
+        )
         self._ptz_available = True
         self._ptz_move_mode = "continuous"
         debug_ptz(
-            f"{getattr(self.cam_cfg, 'name', '')}: PTZ enabled token={profile_token} ptz_xaddr={ptz_xaddr}"
+            f"{getattr(self.cam_cfg, 'name', '')}: PTZ enabled token={profile_token} "
+            f"zoom={bool(getattr(self, '_ptz_has_zoom', False))} "
+            f"presets={bool(getattr(self, '_ptz_supports_presets', False))} "
+            f"(disabled_zoom={bool(getattr(self.cam_cfg, 'ptz_disable_zoom', False))} "
+            f"disabled_presets={bool(getattr(self.cam_cfg, 'ptz_disable_presets', False))}) "
+            f"ptz_xaddr={ptz_xaddr}"
         )
         # Trigger an overlay redraw so the PTZ control appears.
         self._overlay_cache_dirty = True
@@ -578,6 +609,43 @@ class CameraWidget(QtWidgets.QWidget):
         except Exception:
             pass
 
+    def _ptz_enqueue_home(self) -> None:
+        self._ensure_ptz_worker()
+        q = getattr(self, "_ptz_queue", None)
+        if q is None:
+            return
+        debug_ptz(f"{getattr(self.cam_cfg, 'name', '')}: PTZ enqueue home")
+        try:
+            while True:
+                _ = q.get_nowait()
+        except queue.Empty:
+            pass
+        try:
+            q.put_nowait(("stop",))
+            q.put_nowait(("home",))
+        except Exception:
+            pass
+
+    def _ptz_enqueue_preset(self, preset_token: str) -> None:
+        self._ensure_ptz_worker()
+        q = getattr(self, "_ptz_queue", None)
+        if q is None:
+            return
+        preset_token = str(preset_token or "").strip()
+        if not preset_token:
+            return
+        debug_ptz(f"{getattr(self.cam_cfg, 'name', '')}: PTZ enqueue preset {preset_token}")
+        try:
+            while True:
+                _ = q.get_nowait()
+        except queue.Empty:
+            pass
+        try:
+            q.put_nowait(("stop",))
+            q.put_nowait(("preset", preset_token))
+        except Exception:
+            pass
+
     def _ptz_worker_loop(self) -> None:
         device_xaddr = getattr(self, "_ptz_device_xaddr", None)
         ptz_xaddr = getattr(self, "_ptz_xaddr", None)
@@ -621,8 +689,19 @@ class CameraWidget(QtWidgets.QWidget):
                     cli.ptz_stop(
                         token,
                         ptz_xaddr=ptz_xaddr,
-                        zoom=bool(getattr(self, "_ptz_has_zoom", True)),
+                        zoom=bool(getattr(self, "_ptz_has_zoom", False)),
                     )
+                elif cmd[0] == "home":
+                    debug_ptz(f"{getattr(self.cam_cfg, 'name', '')}: PTZ send home")
+                    cli.ptz_goto_home(token, ptz_xaddr=ptz_xaddr)
+                elif cmd[0] == "preset" and len(cmd) >= 2:
+                    preset_token = str(cmd[1] or "").strip()
+                    if not preset_token:
+                        continue
+                    debug_ptz(
+                        f"{getattr(self.cam_cfg, 'name', '')}: PTZ send preset {preset_token}"
+                    )
+                    cli.ptz_goto_preset(token, preset_token, ptz_xaddr=ptz_xaddr)
                 elif cmd[0] == "move" and len(cmd) >= 4:
                     pan, tilt, zoom = float(cmd[1]), float(cmd[2]), float(cmd[3])
                     now = time.time()
@@ -692,15 +771,72 @@ class CameraWidget(QtWidgets.QWidget):
             return
         self._ptz_enqueue_move(pan, tilt, zoom)
 
+    def _ptz_map_pan_tilt_for_view(self, pan: float, tilt: float) -> tuple[float, float]:
+        """
+        Map PTZ directions to match the displayed stream orientation.
+
+        The video frame is rotated/flipped for display via `_apply_orientation()`. If a
+        camera is mounted upside-down or mirrored, the PTZ axes can feel reversed. This
+        helper compensates so "left/right/up/down" controls match what the user sees.
+
+        Input/Output use screen-style coordinates:
+          - `pan` > 0 means "move right"
+          - `tilt` > 0 means "move up"
+        """
+        try:
+            rot = int(getattr(self.cam_cfg, "rotation_deg", 0) or 0) % 360
+        except Exception:
+            rot = 0
+        flip_h = bool(getattr(self.cam_cfg, "flip_horizontal", False))
+        flip_v = bool(getattr(self.cam_cfg, "flip_vertical", False))
+
+        # Work in image-vector space (x right, y down) to match cv2 rotation semantics.
+        x = float(pan)
+        y = float(-tilt)
+
+        # Undo flips (display applies flips after rotation).
+        if flip_v:
+            y = -y
+        if flip_h:
+            x = -x
+
+        # Undo rotation (display rotates the image).
+        if rot == 90:
+            # Inverse of ROTATE_90_CLOCKWISE is 90 CCW.
+            x, y = y, -x
+        elif rot == 180:
+            x, y = -x, -y
+        elif rot == 270:
+            # Inverse of ROTATE_90_COUNTERCLOCKWISE is 90 CW.
+            x, y = -y, x
+
+        return x, -y
+
     def _ptz_set_velocity(self, pan: float, tilt: float, zoom: float) -> None:
         if not bool(getattr(self, "_ptz_available", False)):
             return
-        pan = float(max(-1.0, min(1.0, pan)))
-        tilt = float(max(-1.0, min(1.0, tilt)))
-        zoom = float(max(-1.0, min(1.0, zoom)))
+        pan_in, tilt_in, zoom_in = float(pan), float(tilt), float(zoom)
+
+        # Zoom: clamp to zero if the camera doesn't expose a zoom axis.
+        if not bool(getattr(self, "_ptz_has_zoom", False)):
+            zoom_in = 0.0
+
+        pan_m, tilt_m = self._ptz_map_pan_tilt_for_view(pan_in, tilt_in)
+
+        pan = float(max(-1.0, min(1.0, pan_m)))
+        tilt = float(max(-1.0, min(1.0, tilt_m)))
+        zoom = float(max(-1.0, min(1.0, zoom_in)))
 
         prev = getattr(self, "_ptz_active_vel", (0.0, 0.0, 0.0))
         if (pan, tilt, zoom) != prev:
+            if (pan_in, tilt_in) != (pan, tilt) and (pan_in != 0.0 or tilt_in != 0.0):
+                debug_ptz(
+                    f"{getattr(self.cam_cfg, 'name', '')}: PTZ mapped view->cam "
+                    f"({pan_in:.2f}, {tilt_in:.2f}) -> ({pan:.2f}, {tilt:.2f}) "
+                    f"rot={int(getattr(self.cam_cfg, 'rotation_deg', 0) or 0)} "
+                    f"flip_h={bool(getattr(self.cam_cfg, 'flip_horizontal', False))} "
+                    f"flip_v={bool(getattr(self.cam_cfg, 'flip_vertical', False))}"
+                )
             debug_ptz(
                 f"{getattr(self.cam_cfg, 'name', '')}: PTZ velocity {prev} -> ({pan:.2f}, {tilt:.2f}, {zoom:.2f})"
             )
@@ -732,6 +868,136 @@ class CameraWidget(QtWidgets.QWidget):
             pass
         self._ptz_set_velocity(0.0, 0.0, 0.0)
 
+    def _ptz_confirm_home(self) -> bool:
+        if bool(getattr(self.cam_cfg, "ptz_home_confirmed", False)):
+            return True
+
+        if bool(getattr(self, "_ptz_home_warned", False)):
+            return True
+
+        dlg = QtWidgets.QMessageBox(self)
+        dlg.setWindowTitle("PTZ Home")
+        dlg.setIcon(QtWidgets.QMessageBox.Icon.Warning)
+        dlg.setText("Go to PTZ home position?")
+        dlg.setInformativeText(
+            "Some cheaper PTZ cameras may run motors against endstops for several seconds when going home.\n\n"
+            "Continue?"
+        )
+        dlg.setStandardButtons(
+            QtWidgets.QMessageBox.StandardButton.Yes
+            | QtWidgets.QMessageBox.StandardButton.Cancel
+        )
+        dlg.setDefaultButton(QtWidgets.QMessageBox.StandardButton.Cancel)
+
+        cb = QtWidgets.QCheckBox("Don't show this warning again for this camera")
+        try:
+            dlg.setCheckBox(cb)
+        except Exception:
+            pass
+
+        if dlg.exec() != QtWidgets.QMessageBox.StandardButton.Yes:
+            return False
+
+        self._ptz_home_warned = True
+        if bool(getattr(cb, "isChecked", lambda: False)()):
+            try:
+                self.cam_cfg.ptz_home_confirmed = True
+                save_settings(self.app_cfg)
+            except Exception:
+                pass
+        return True
+
+    def _ptz_goto_home(self) -> None:
+        if not bool(getattr(self, "_ptz_available", False)):
+            return
+        if not self._ptz_confirm_home():
+            return
+        self._ptz_stop()
+        self._ptz_enqueue_home()
+
+    def _ptz_open_presets_dialog(self) -> None:
+        if not bool(getattr(self, "_ptz_available", False)):
+            return
+        if bool(getattr(self, "_ptz_presets_loading", False)):
+            return
+        device_xaddr = getattr(self, "_ptz_device_xaddr", None)
+        ptz_xaddr = getattr(self, "_ptz_xaddr", None)
+        token = getattr(self, "_ptz_profile_token", None)
+        if not device_xaddr or not ptz_xaddr or not token:
+            return
+
+        self._ptz_presets_loading = True
+        debug_ptz(f"{getattr(self.cam_cfg, 'name', '')}: PTZ presets load start")
+
+        user, pwd = self._extract_url_credentials()
+
+        def worker() -> None:
+            presets = []
+            err: str | None = None
+            try:
+                from onvif import OnvifClient
+
+                cli = OnvifClient(device_xaddr, username=user, password=pwd)
+                presets = cli.ptz_get_presets(token, ptz_xaddr=ptz_xaddr) or []
+            except Exception as e:
+                err = str(e)
+
+            def show() -> None:
+                self._ptz_presets_loading = False
+                if err:
+                    QtWidgets.QMessageBox.warning(
+                        self, "PTZ Presets", f"Failed to load presets:\n{err}"
+                    )
+                    return
+                if not presets:
+                    QtWidgets.QMessageBox.information(
+                        self, "PTZ Presets", "No presets reported by this camera."
+                    )
+                    return
+
+                items: list[str] = []
+                mapping: dict[str, str] = {}
+                used: dict[str, int] = {}
+                for p in presets:
+                    tok = (getattr(p, "token", None) or "").strip()
+                    if not tok:
+                        continue
+                    name = (getattr(p, "name", None) or "").strip()
+                    label = f"{name} ({tok})" if (name and name != tok) else tok
+                    n = used.get(label, 0) + 1
+                    used[label] = n
+                    if n > 1:
+                        label = f"{label} [{n}]"
+                    items.append(label)
+                    mapping[label] = tok
+
+                if not items:
+                    QtWidgets.QMessageBox.information(
+                        self, "PTZ Presets", "No usable presets reported by this camera."
+                    )
+                    return
+
+                choice, ok = QtWidgets.QInputDialog.getItem(
+                    self,
+                    f"PTZ Presets - {self.cam_cfg.name}",
+                    "Go to preset:",
+                    items,
+                    0,
+                    False,
+                )
+                if ok and choice:
+                    preset_token = mapping.get(choice)
+                    if preset_token:
+                        self._ptz_stop()
+                        self._ptz_enqueue_preset(preset_token)
+
+            try:
+                QtCore.QTimer.singleShot(0, self, show)
+            except Exception:
+                self._ptz_presets_loading = False
+
+        threading.Thread(target=worker, daemon=True).start()
+
     def _ptz_velocity_from_keys(self) -> tuple[float, float, float]:
         keys = getattr(self, "_ptz_keys_down", set()) or set()
         speed = 0.5
@@ -746,7 +1012,7 @@ class CameraWidget(QtWidgets.QWidget):
             tilt += speed
         if QtCore.Qt.Key.Key_Down in keys:
             tilt -= speed
-        if bool(getattr(self, "_ptz_has_zoom", True)):
+        if bool(getattr(self, "_ptz_has_zoom", False)):
             if QtCore.Qt.Key.Key_PageUp in keys:
                 zoom += speed
             if QtCore.Qt.Key.Key_PageDown in keys:
@@ -763,14 +1029,16 @@ class CameraWidget(QtWidgets.QWidget):
                 if not bool(getattr(self, "_ptz_available", False)):
                     return False
                 key = getattr(event, "key", lambda: None)()
-                if key not in (
+                allowed = {
                     QtCore.Qt.Key.Key_Left,
                     QtCore.Qt.Key.Key_Right,
                     QtCore.Qt.Key.Key_Up,
                     QtCore.Qt.Key.Key_Down,
-                    QtCore.Qt.Key.Key_PageUp,
-                    QtCore.Qt.Key.Key_PageDown,
-                ):
+                }
+                if bool(getattr(self, "_ptz_has_zoom", False)):
+                    allowed.add(QtCore.Qt.Key.Key_PageUp)
+                    allowed.add(QtCore.Qt.Key.Key_PageDown)
+                if key not in allowed:
                     return False
                 if getattr(event, "isAutoRepeat", lambda: False)():
                     return True
@@ -823,7 +1091,23 @@ class CameraWidget(QtWidgets.QWidget):
                         try:
                             if rect.contains(pt):
                                 self.view.setFocus()
-                                self._ptz_mouse_action = str(name)
+                                name = str(name)
+                                if name == "home":
+                                    debug_ptz(
+                                        f"{getattr(self.cam_cfg, 'name', '')}: PTZ mouse press action=home "
+                                        f"pt=({pt.x():.0f},{pt.y():.0f})"
+                                    )
+                                    self._ptz_goto_home()
+                                    return True
+                                if name == "presets":
+                                    debug_ptz(
+                                        f"{getattr(self.cam_cfg, 'name', '')}: PTZ mouse press action=presets "
+                                        f"pt=({pt.x():.0f},{pt.y():.0f})"
+                                    )
+                                    self._ptz_open_presets_dialog()
+                                    return True
+
+                                self._ptz_mouse_action = name
                                 debug_ptz(
                                     f"{getattr(self.cam_cfg, 'name', '')}: PTZ mouse press action={name} "
                                     f"pt=({pt.x():.0f},{pt.y():.0f})"

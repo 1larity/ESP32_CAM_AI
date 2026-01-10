@@ -8,6 +8,7 @@ from .client import (
     OnvifAuthError,
     OnvifError,
     OnvifHttpError,
+    OnvifPreset,
     try_onvif_zeep_stream,
 )
 
@@ -18,5 +19,6 @@ __all__ = [
     "OnvifAuthError",
     "OnvifError",
     "OnvifHttpError",
+    "OnvifPreset",
     "try_onvif_zeep_stream",
 ]

@@ -40,6 +40,9 @@ class CameraSettings:
     ai_faces: Optional[bool] = None
     ai_pets: Optional[bool] = None
     overlay_scale: Optional[float] = None  # text/box scale computed on first frame
+    ptz_home_confirmed: bool = False  # disable the PTZ home warning for this camera
+    ptz_disable_zoom: bool = False   # force-hide PTZ zoom controls (for misreporting cameras)
+    ptz_disable_presets: bool = False  # force-hide PTZ presets button
     # Per-camera orientation
     rotation_deg: int = 0           # 0, 90, 180, 270
     flip_horizontal: bool = False
@@ -142,6 +145,9 @@ def load_settings() -> AppSettings:
                     ai_faces=c.get("ai_faces"),
                     ai_pets=c.get("ai_pets"),
                     overlay_scale=c.get("overlay_scale"),
+                    ptz_home_confirmed=bool(c.get("ptz_home_confirmed", False)),
+                    ptz_disable_zoom=bool(c.get("ptz_disable_zoom", False)),
+                    ptz_disable_presets=bool(c.get("ptz_disable_presets", False)),
                     rotation_deg=int(c.get("rotation_deg", 0) or 0),
                     flip_horizontal=bool(c.get("flip_horizontal", False)),
                     flip_vertical=bool(c.get("flip_vertical", False)),

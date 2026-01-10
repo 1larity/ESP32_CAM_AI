@@ -9,35 +9,35 @@
   "yolo_url": null,
   "haar_url": null,
   "face_model": "C:\\Users\\stellaris\\Documents\\PlatformIO\\Projects\\ESP32_CAM_AI\\AI\\models\\face_yunet.onnx",
-  "window_geometry": "01d9d0cb0003000000000aa0000000830000121b000004b700000aa0000000a20000121b000004b700000002000000000a0000000aa0000000a20000121b000004b7",
-  "window_state": "000000ff00000000fd00000001000000010000011b00000400fc0200000001fb00000014006500760065006e007400730044006f0063006b0100000016000004000000009100ffffff0000065d0000040000000004000000040000000800000008fc00000000",
+  "window_geometry": "01d9d0cb0003000000000a00fffffff8000013ff0000057700000aa0000000a20000121b000004b700000002020000000a0000000a0000000017000013ff00000577",
+  "window_state": "000000ff00000000fd00000001000000010000011b0000054bfc0200000001fb00000014006500760065006e007400730044006f0063006b01000000160000054b0000009100ffffff000008e10000054b00000004000000040000000800000008fc00000000",
   "window_geometries": {
     "Cam-2": [
-      819,
-      533,
-      817,
-      531,
+      1137,
+      678,
+      1136,
+      677,
       0
     ],
     "Cam-1": [
       0,
-      533,
-      819,
-      531,
+      678,
+      1137,
+      677,
       0
     ],
     "Cam-3": [
-      818,
+      1137,
       0,
-      817,
-      533,
+      1136,
+      678,
       0
     ],
     "Cam-4": [
       0,
       0,
-      819,
-      533,
+      1137,
+      678,
       0
     ]
   },
@@ -64,7 +64,7 @@
   "mqtt_discovery_prefix": "homeassistant",
   "mqtt_discovery_under_base_topic": false,
   "mqtt_user": "homeassistant",
-  "mqtt_password_enc": "BwsE2H/EQ08OIRGLXppT4ZD6osOII2JMVHjVm/iXQIVzuYie4RvS6qxN4GGMNAiZp2tqJiI=",
+  "mqtt_password_enc": "3Nniy5W27kzRbUI27KcV13gDRfjZUR4rnF+FYNXPCjmre6aUFysvfipt53MJZ0nxDZWFf90=",
   "cameras": [
     {
       "name": "Cam-2",
@@ -75,7 +75,7 @@
       "alt_streams": [],
       "is_onvif": false,
       "overlay_text_pct": 4.0,
-      "view_scale": 0.6266666666666667,
+      "view_scale": 1.0033333333333334,
       "record_motion": false,
       "motion_sensitivity": 53,
       "ai_enabled": true,
@@ -83,10 +83,13 @@
       "ai_faces": true,
       "ai_pets": true,
       "overlay_scale": 1.25,
+      "ptz_home_confirmed": false,
+      "ptz_disable_zoom": false,
+      "ptz_disable_presets": false,
       "rotation_deg": 0,
       "flip_horizontal": false,
       "flip_vertical": false,
-      "password_enc": "rMvG2d5HVmj1qqXEFdMr9JwFQ0W3rcUHaxSBh1U0VgnIA7HWLuhnau6qdPN+anpBw4qHkCI="
+      "password_enc": "1eWe0k7yv5Oy2tv9wSvYSgiiwnXjPvAoa6kQsrHyFg2adNx7YwlYAr1kNOmhZulgyJdcwfE="
     },
     {
       "name": "Cam-1",
@@ -97,7 +100,7 @@
       "alt_streams": [],
       "is_onvif": false,
       "overlay_text_pct": 4.0,
-      "view_scale": 0.6266666666666667,
+      "view_scale": 1.0033333333333334,
       "record_motion": false,
       "motion_sensitivity": 53,
       "ai_enabled": true,
@@ -105,10 +108,13 @@
       "ai_faces": true,
       "ai_pets": true,
       "overlay_scale": 1.25,
+      "ptz_home_confirmed": false,
+      "ptz_disable_zoom": false,
+      "ptz_disable_presets": false,
       "rotation_deg": 0,
       "flip_horizontal": false,
       "flip_vertical": false,
-      "password_enc": "blXUqCmFtr0AR5fCm2ZFePLg4IwDSkEevO88co0p273OD5Yd6zytgg/a0FDYKc6sVffaLaI="
+      "password_enc": "cXI7nfhBYi8jl4jJjOtJ+TP3/Wp2SexCTnsISI3sqU0KKB3xoDXD53FCaTHj/Ebs+2xWEIA="
     },
     {
       "name": "Cam-3",
@@ -126,7 +132,7 @@
       ],
       "is_onvif": true,
       "overlay_text_pct": 4.0,
-      "view_scale": 1.0140625,
+      "view_scale": 1.675,
       "record_motion": false,
       "motion_sensitivity": 53,
       "ai_enabled": true,
@@ -134,10 +140,13 @@
       "ai_faces": true,
       "ai_pets": true,
       "overlay_scale": 2.7,
+      "ptz_home_confirmed": false,
+      "ptz_disable_zoom": false,
+      "ptz_disable_presets": false,
       "rotation_deg": 0,
       "flip_horizontal": false,
       "flip_vertical": true,
-      "password_enc": "ybAy46xtnMFdv/C6KQQH6KigR8HrGZkN/Fai9v4Xpi84Dtw/GBCAz5J/ExeSNod6uDm+Yg=="
+      "password_enc": "s0DiqHgttDqj5l8auYHYnyNOvYDQztpxqIiDDXQ2yJKuVbLNdrNlTbMxWwixQxWf3NEgRg=="
     },
     {
       "name": "Cam-4",
@@ -154,7 +163,7 @@
       ],
       "is_onvif": true,
       "overlay_text_pct": 4.0,
-      "view_scale": 0.2747395833333333,
+      "view_scale": 0.4652777777777778,
       "record_motion": true,
       "motion_sensitivity": 53,
       "ai_enabled": true,
@@ -162,10 +171,13 @@
       "ai_faces": true,
       "ai_pets": true,
       "overlay_scale": 2.7,
+      "ptz_home_confirmed": false,
+      "ptz_disable_zoom": false,
+      "ptz_disable_presets": false,
       "rotation_deg": 180,
       "flip_horizontal": false,
       "flip_vertical": false,
-      "password_enc": "oecGYrs/Olk+RbaIVPTbfif5l4JcNBjqR8elRGlZzOTbvLW3jqAC2wsyLRlhtv8985F8yg=="
+      "password_enc": "vx+mtgmFjaK2HoSn8JAiYbwFh6h8Vdd33ll7kH26f26eGVEmRrM177twB6t3FWnx5rqbIA=="
     }
   ]
 }

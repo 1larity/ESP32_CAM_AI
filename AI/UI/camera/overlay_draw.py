@@ -150,7 +150,15 @@ def _draw_ptz_controls(self, p: QtGui.QPainter, w: int, h: int) -> None:
 
     p.save()
     try:
-        scale = float(getattr(self, "_overlay_scale", 1.0) or 1.0)
+        # Scale controls similarly to overlay text so stream swaps and per-camera
+        # text sizing affect PTZ UI too.
+        # Baseline: 480p @ 4% => ~19 px text height.
+        text_px = int(getattr(self, "_overlay_text_px", 0) or 0)
+        if text_px > 0:
+            scale = float(text_px) / 19.0
+        else:
+            scale = float(getattr(self, "_overlay_scale", 1.0) or 1.0)
+        scale = max(0.8, min(4.0, scale))
         margin = int(10 * scale)
         gap = int(6 * scale)
         pad = int(6 * scale)
@@ -158,16 +166,22 @@ def _draw_ptz_controls(self, p: QtGui.QPainter, w: int, h: int) -> None:
         dpad_size = int(72 * scale)
         zoom_btn_h = int(18 * scale)
         zoom_gap = int(4 * scale)
-        has_zoom = bool(getattr(self, "_ptz_has_zoom", True))
+        preset_btn_h = int(18 * scale)
+        has_zoom = bool(getattr(self, "_ptz_has_zoom", False))
+        has_presets = bool(getattr(self, "_ptz_supports_presets", False))
 
         y = margin
         # If the REC indicator is present (top-right), place PTZ below it.
         if bool(getattr(self, "_rec_indicator_on", False)):
-            y += int(26 * scale) + margin
+            rec_scale = float(getattr(self, "_overlay_scale", 1.0) or 1.0)
+            y = max(y, int(10 * rec_scale) + int(26 * rec_scale) + margin)
 
         total_h = dpad_size
         if has_zoom:
             total_h += gap + zoom_btn_h * 2 + zoom_gap
+        if has_presets:
+            # Presets button row (single bar at bottom)
+            total_h += gap + preset_btn_h
 
         x = w - margin - dpad_size
         if x < margin:
@@ -186,6 +200,7 @@ def _draw_ptz_controls(self, p: QtGui.QPainter, w: int, h: int) -> None:
         r_down = QtCore.QRectF(dpad.left() + cell, dpad.top() + 2 * cell, cell, cell)
         r_left = QtCore.QRectF(dpad.left(), dpad.top() + cell, cell, cell)
         r_right = QtCore.QRectF(dpad.left() + 2 * cell, dpad.top() + cell, cell, cell)
+        r_home = QtCore.QRectF(dpad.left() + cell, dpad.top() + cell, cell, cell)
 
         # Zoom buttons
         regions: dict[str, QtCore.QRectF] = {
@@ -193,6 +208,7 @@ def _draw_ptz_controls(self, p: QtGui.QPainter, w: int, h: int) -> None:
             "down": r_down,
             "left": r_left,
             "right": r_right,
+            "home": r_home,
         }
         if has_zoom:
             y_zoom = dpad.bottom() + gap
@@ -200,6 +216,15 @@ def _draw_ptz_controls(self, p: QtGui.QPainter, w: int, h: int) -> None:
             r_zo = QtCore.QRectF(dpad.left(), y_zoom + zoom_btn_h + zoom_gap, dpad.width(), zoom_btn_h)
             regions["zoom_in"] = r_zi
             regions["zoom_out"] = r_zo
+            end_y = r_zo.bottom()
+        else:
+            end_y = dpad.bottom()
+
+        if has_presets:
+            # Presets button row (below zoom if present)
+            y_preset = end_y + gap
+            r_presets = QtCore.QRectF(dpad.left(), y_preset, dpad.width(), preset_btn_h)
+            regions["presets"] = r_presets
 
         # Persist for hit testing
         try:
@@ -210,7 +235,7 @@ def _draw_ptz_controls(self, p: QtGui.QPainter, w: int, h: int) -> None:
         # Draw buttons + icons
         p.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255, 140), max(1, int(1 * scale))))
         p.setBrush(QtGui.QBrush(QtGui.QColor(255, 255, 255, 30)))
-        for r in (r_up, r_down, r_left, r_right):
+        for r in (r_up, r_down, r_left, r_right, r_home):
             p.drawRoundedRect(r.adjusted(1, 1, -1, -1), 4 * scale, 4 * scale)
 
         def tri(points: list[QtCore.QPointF]) -> None:
@@ -242,6 +267,35 @@ def _draw_ptz_controls(self, p: QtGui.QPainter, w: int, h: int) -> None:
             QtCore.QPointF(r_right.left() + pad, r_right.bottom() - pad),
         ])
 
+        # Home icon (simple house)
+        try:
+            p.setBrush(QtGui.QBrush(QtGui.QColor(255, 255, 255, 210)))
+            p.setPen(QtCore.Qt.PenStyle.NoPen)
+            roof_y = r_home.top() + pad * 0.7
+            mid_y = r_home.center().y()
+            base_bottom = r_home.bottom() - pad * 0.8
+            left = r_home.left() + pad
+            right = r_home.right() - pad
+            cx = r_home.center().x()
+            roof = QtGui.QPolygonF(
+                [
+                    QtCore.QPointF(cx, roof_y),
+                    QtCore.QPointF(left, mid_y),
+                    QtCore.QPointF(right, mid_y),
+                ]
+            )
+            p.drawPolygon(roof)
+            base = QtCore.QRectF(
+                left + pad * 0.3,
+                mid_y,
+                (right - left) - pad * 0.6,
+                base_bottom - mid_y,
+            )
+            p.drawRect(base)
+            p.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255, 140), max(1, int(1 * scale))))
+        except Exception:
+            pass
+
         if has_zoom:
             # Zoom buttons: rounded boxes with + / -
             for r in (regions["zoom_in"], regions["zoom_out"]):
@@ -262,6 +316,22 @@ def _draw_ptz_controls(self, p: QtGui.QPainter, w: int, h: int) -> None:
             cx, cy = r.center().x(), r.center().y()
             arm = min(r.width(), r.height()) * 0.25
             p.drawLine(QtCore.QPointF(cx - arm, cy), QtCore.QPointF(cx + arm, cy))
+
+        if has_presets:
+            # Presets button (hamburger icon)
+            try:
+                p.setBrush(QtGui.QBrush(QtGui.QColor(255, 255, 255, 30)))
+                p.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255, 140), max(1, int(1 * scale))))
+                p.drawRoundedRect(r_presets.adjusted(1, 1, -1, -1), 4 * scale, 4 * scale)
+
+                pen = QtGui.QPen(QtGui.QColor(255, 255, 255, 220), max(1, int(2 * scale)))
+                p.setPen(pen)
+                cx, cy = r_presets.center().x(), r_presets.center().y()
+                arm = min(r_presets.width(), r_presets.height()) * 0.32
+                for dy in (-arm * 0.5, 0.0, arm * 0.5):
+                    p.drawLine(QtCore.QPointF(cx - arm, cy + dy), QtCore.QPointF(cx + arm, cy + dy))
+            except Exception:
+                pass
     finally:
         p.restore()
 

@@ -72,6 +72,12 @@ class OnvifDeviceInfo:
     serial: Optional[str]
 
 
+@dataclass(slots=True)
+class OnvifPreset:
+    token: str
+    name: Optional[str] = None
+
+
 class OnvifClient:
     """
     Lightweight ONVIF SOAP client using requests only (digest auth supported).
@@ -346,6 +352,120 @@ class OnvifClient:
             action="http://www.onvif.org/ver20/ptz/wsdl/Stop",
         )
 
+    def ptz_goto_home(self, profile_token: str, *, ptz_xaddr: str) -> None:
+        body = f"""
+        <tptz:GotoHomePosition xmlns:tptz="http://www.onvif.org/ver20/ptz/wsdl">
+          <tptz:ProfileToken>{profile_token}</tptz:ProfileToken>
+        </tptz:GotoHomePosition>
+        """
+        self._post_soap(
+            ptz_xaddr,
+            body,
+            action="http://www.onvif.org/ver20/ptz/wsdl/GotoHomePosition",
+        )
+
+    def ptz_get_presets(self, profile_token: str, *, ptz_xaddr: str) -> List[OnvifPreset]:
+        body = f"""
+        <tptz:GetPresets xmlns:tptz="http://www.onvif.org/ver20/ptz/wsdl">
+          <tptz:ProfileToken>{profile_token}</tptz:ProfileToken>
+        </tptz:GetPresets>
+        """
+        root = self._post_soap(
+            ptz_xaddr,
+            body,
+            action="http://www.onvif.org/ver20/ptz/wsdl/GetPresets",
+        )
+        presets: list[OnvifPreset] = []
+        for pe in root.findall(".//tptz:GetPresetsResponse/tptz:Preset", NS):
+            tok = pe.attrib.get("token") or None
+            if not tok:
+                continue
+            name_el = pe.find("./tt:Name", NS)
+            name = (
+                name_el.text.strip()
+                if name_el is not None and name_el.text
+                else None
+            )
+            presets.append(OnvifPreset(token=tok, name=name))
+        return presets
+
+    def ptz_supports_zoom(self, profile_token: Optional[str] = None, *, ptz_xaddr: str) -> bool:
+        """
+        Best-effort capability probe for whether this PTZ device exposes a zoom axis.
+
+        Some devices advertise ZoomSpaces in GetNodes even when no zoom is usable. When a
+        profile token is available, prefer GetStatus and only report zoom if the status
+        response includes a Zoom position element.
+        """
+        body = """
+        <tptz:GetNodes xmlns:tptz="http://www.onvif.org/ver20/ptz/wsdl" />
+        """
+        root = self._post_soap(
+            ptz_xaddr,
+            body,
+            action="http://www.onvif.org/ver20/ptz/wsdl/GetNodes",
+        )
+        has_zoom_spaces = False
+        for spaces in root.findall(".//{*}SupportedPTZSpaces"):
+            for el in spaces.iter():
+                tag = getattr(el, "tag", "")
+                if isinstance(tag, str) and "Zoom" in tag:
+                    has_zoom_spaces = True
+                    break
+            if has_zoom_spaces:
+                break
+        if not has_zoom_spaces:
+            return False
+
+        if profile_token:
+            body = f"""
+            <tptz:GetStatus xmlns:tptz="http://www.onvif.org/ver20/ptz/wsdl">
+              <tptz:ProfileToken>{profile_token}</tptz:ProfileToken>
+            </tptz:GetStatus>
+            """
+            try:
+                root = self._post_soap(
+                    ptz_xaddr,
+                    body,
+                    action="http://www.onvif.org/ver20/ptz/wsdl/GetStatus",
+                )
+            except OnvifError:
+                # Conservative: if we cannot confirm a zoom axis via status, hide zoom controls.
+                return False
+
+            zoom_el = root.find(
+                ".//tptz:GetStatusResponse/tptz:PTZStatus/tt:Position/tt:Zoom",
+                NS,
+            )
+            if zoom_el is not None:
+                return True
+            # Fallback for odd namespace/layouts
+            if root.find(".//{*}PTZStatus//{*}Position//{*}Zoom") is not None:
+                return True
+            return False
+
+        # Fallback: no profile token available, so rely on the spaces hint.
+        return True
+
+    def ptz_goto_preset(
+        self,
+        profile_token: str,
+        preset_token: str,
+        *,
+        ptz_xaddr: str,
+    ) -> None:
+        body = f"""
+        <tptz:GotoPreset xmlns:tptz="http://www.onvif.org/ver20/ptz/wsdl">
+          <tptz:ProfileToken>{profile_token}</tptz:ProfileToken>
+          <tptz:PresetToken>{preset_token}</tptz:PresetToken>
+        </tptz:GotoPreset>
+        """
+        self._post_soap(
+            ptz_xaddr,
+            body,
+            action="http://www.onvif.org/ver20/ptz/wsdl/GotoPreset",
+        )
+
     # ------------------ internals ------------------ #
     def _post_soap(self, url: str, body: str, action: Optional[str] = None) -> ET.Element:
         header = ""
@@ -438,5 +558,6 @@ __all__ = [
     "OnvifProfile",
     "OnvifCapabilities",
     "OnvifDeviceInfo",
+    "OnvifPreset",
     "OnvifClient",
 ]

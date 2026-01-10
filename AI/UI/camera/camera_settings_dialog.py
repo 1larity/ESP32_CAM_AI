@@ -122,6 +122,15 @@ class CameraSettingsDialog(QtWidgets.QDialog):
         layout.addRow(self.cb_flip_h)
         layout.addRow(self.cb_flip_v)
 
+        # PTZ controls (ONVIF)
+        if bool(getattr(cam_cfg, "is_onvif", False)):
+            self.cb_ptz_hide_zoom = QtWidgets.QCheckBox("Hide PTZ zoom buttons")
+            self.cb_ptz_hide_zoom.setChecked(bool(getattr(cam_cfg, "ptz_disable_zoom", False)))
+            self.cb_ptz_hide_presets = QtWidgets.QCheckBox("Hide PTZ presets button")
+            self.cb_ptz_hide_presets.setChecked(bool(getattr(cam_cfg, "ptz_disable_presets", False)))
+            layout.addRow(self.cb_ptz_hide_zoom)
+            layout.addRow(self.cb_ptz_hide_presets)
+
         # Overlay controls
         self.cb_overlay_det = QtWidgets.QCheckBox("Show detections (boxes + labels)")
         any_det = (
@@ -322,6 +331,41 @@ class CameraSettingsDialog(QtWidgets.QDialog):
         self.cam_cfg.flip_vertical = flip_v
         if changed_orientation:
             self.widget._on_orientation_changed()
+
+        # PTZ controls (ONVIF)
+        if hasattr(self, "cb_ptz_hide_zoom") and hasattr(self, "cb_ptz_hide_presets"):
+            hide_zoom = bool(self.cb_ptz_hide_zoom.isChecked())
+            hide_presets = bool(self.cb_ptz_hide_presets.isChecked())
+            changed_ptz_ui = (
+                hide_zoom != bool(getattr(self.cam_cfg, "ptz_disable_zoom", False))
+                or hide_presets != bool(getattr(self.cam_cfg, "ptz_disable_presets", False))
+            )
+            self.cam_cfg.ptz_disable_zoom = hide_zoom
+            self.cam_cfg.ptz_disable_presets = hide_presets
+            if changed_ptz_ui:
+                try:
+                    detected_zoom = bool(
+                        getattr(self.widget, "_ptz_detected_has_zoom", getattr(self.widget, "_ptz_has_zoom", False))
+                    )
+                    detected_presets = bool(
+                        getattr(
+                            self.widget,
+                            "_ptz_detected_has_presets",
+                            getattr(self.widget, "_ptz_supports_presets", False),
+                        )
+                    )
+                    self.widget._ptz_has_zoom = detected_zoom and (not hide_zoom)
+                    self.widget._ptz_supports_presets = detected_presets and (not hide_presets)
+                except Exception:
+                    pass
+                try:
+                    self.widget._ptz_stop()
+                except Exception:
+                    pass
+                try:
+                    self.widget._invalidate_overlay_cache()
+                except Exception:
+                    pass
 
         # Overlays
         det_on = self.cb_overlay_det.isChecked()

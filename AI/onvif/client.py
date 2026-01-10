@@ -9,6 +9,7 @@ from .soap_client import (
     OnvifDeviceInfo,
     OnvifError,
     OnvifHttpError,
+    OnvifPreset,
     OnvifProfile,
 )
 from .zeep_loader import ONVIFCamera, _PIP_ONVIF_MODULES, _load_onvif_zeep_camera
@@ -23,6 +24,7 @@ __all__ = [
     "OnvifDeviceInfo",
     "OnvifError",
     "OnvifHttpError",
+    "OnvifPreset",
     "OnvifProfile",
     "ONVIFCamera",
     "_PIP_ONVIF_MODULES",

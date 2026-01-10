@@ -198,7 +198,8 @@ def init_camera_widget(self) -> None:
 
     # PTZ (ONVIF) overlay / hotkeys (populated lazily via discovery/capabilities).
     self._ptz_available = False
-    self._ptz_has_zoom = True
+    self._ptz_has_zoom = False
+    self._ptz_supports_presets = False
     self._ptz_hit_regions = {}
     self._ptz_mouse_action = None
     self._ptz_keys_down = set()
