@@ -178,7 +178,19 @@ def _draw_pets(
     for d in boxes:
         rgb = _pet_color(d.cls)
         _draw_box(p, d.xyxy, rgb, scale=scale)
-        text = f"{d.cls} {d.score:.2f}"
+        id_label = getattr(d, "id_label", None)
+        id_conf = getattr(d, "id_conf", None)
+        if id_label and str(id_label).lower() not in ("unknown", "pet", "dog", "cat"):
+            try:
+                pct = float(id_conf) * 100.0 if id_conf is not None else None
+            except Exception:
+                pct = None
+            if pct is None:
+                text = f"{id_label} ({d.cls})"
+            else:
+                text = f"{id_label} ({d.cls}) {pct:.0f}%"
+        else:
+            text = f"{d.cls} {d.score:.2f}"
         _draw_label(p, d.xyxy, text, rgb, scale=scale, font_px=font_px)
 
 

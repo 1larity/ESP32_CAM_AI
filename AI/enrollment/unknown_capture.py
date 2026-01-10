@@ -45,6 +45,13 @@ def maybe_save_unknowns(service, cam_name: str, bgr: np.ndarray, pkt, now_ms: in
 
     if getattr(service, "collect_unknown_pets", False):
         for pet in getattr(pkt, "pets", []) or []:
+            # If pet identification has labeled this box, it is no longer "unknown".
+            try:
+                pid = getattr(pet, "id_label", None)
+                if pid and str(pid).strip().lower() not in ("unknown", "pet", "dog", "cat"):
+                    continue
+            except Exception:
+                pass
             last = getattr(service, "_last_unknown_pet", {}).get(cam_name, 0)
             if now_ms - last < 800:
                 continue
@@ -69,4 +76,3 @@ def maybe_save_unknowns(service, cam_name: str, bgr: np.ndarray, pkt, now_ms: in
                     service._promote_unknown(roi, cam_name, is_pet=True)
             except Exception:
                 continue
-

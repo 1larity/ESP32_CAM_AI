@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 from settings import load_settings
 
 # Application version shown on the startup screen (GUI path).
-APP_VERSION = "0.1.13"
+APP_VERSION = "0.1.15"
 
 
 def _fetch_json(url: str, headers: dict) -> dict:

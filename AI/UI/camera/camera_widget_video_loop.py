@@ -6,6 +6,7 @@ from PySide6.QtCore import Slot
 
 from detectors import DetectionPacket
 from enrollment import EnrollmentService
+from pet_id import PetIdService
 from utils import debug, monotonic_ms
 
 
@@ -66,6 +67,19 @@ def attach_video_loop_handlers(cls) -> None:
         pkt = pkt_obj
         if not isinstance(pkt, DetectionPacket):
             return
+
+        # Pet identification (local, no cloud): annotate pkt.pets boxes with id_label/id_conf.
+        # Runs before presence/MQTT so those can publish per-pet states when available.
+        if self._last_bgr is not None and getattr(pkt, "pets", None):
+            try:
+                PetIdService.instance().annotate_packet(
+                    self.cam_cfg.name,
+                    self._last_bgr,
+                    pkt,
+                    models_dir=getattr(self.app_cfg, "models_dir", None),
+                )
+            except Exception:
+                pass
 
         # Presence log
         self._presence.update(pkt)

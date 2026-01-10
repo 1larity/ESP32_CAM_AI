@@ -67,12 +67,56 @@ def _load_face_labels(models_dir: object | None) -> list[str]:
         return []
 
 
+def _load_pet_labels(models_dir: object | None) -> list[str]:
+    """
+    Return known pet label names.
+
+    Preference order:
+      1) models_dir/labels_pets.json (written by pet_id gallery rebuild)
+      2) <models_dir>/../data/pets folder names (fallback)
+    """
+    # 1) labels_pets.json
+    if models_dir:
+        try:
+            p = Path(str(models_dir))
+            labels_path = p / "labels_pets.json"
+            if labels_path.exists():
+                raw = json.loads(labels_path.read_text(encoding="utf-8"))
+                if isinstance(raw, dict):
+                    names = [str(k).strip() for k in raw.keys()]
+                    names = [n for n in names if n]
+                    return sorted(set(names), key=str.casefold)
+        except Exception:
+            pass
+
+    # 2) Scan data/pets next to models_dir
+    try:
+        if not models_dir:
+            return []
+        base = Path(str(models_dir)).resolve().parent
+        pets_root = base / "data" / "pets"
+        if not pets_root.exists():
+            return []
+        names: list[str] = []
+        for d in pets_root.iterdir():
+            if not d.is_dir():
+                continue
+            name = d.name.strip()
+            if not name or name.startswith(".") or name.startswith("auto_pet_"):
+                continue
+            names.append(name)
+        return sorted(set(names), key=str.casefold)
+    except Exception:
+        return []
+
+
 def publish_discovery(mqtt: MqttService, cameras: Iterable[object], discovery_prefix: str, base_topic: str) -> None:
     if mqtt is None or not getattr(mqtt, "connected", False):
         return
     prefix = discovery_prefix.strip("/")
     avail = f"{base_topic}/status"
     face_labels = _load_face_labels(getattr(getattr(mqtt, "cfg", None), "models_dir", None))
+    pet_labels = _load_pet_labels(getattr(getattr(mqtt, "cfg", None), "models_dir", None))
     for cam in cameras:
         name = getattr(cam, "name", None) or "cam"
         dev = _device_block(name)
@@ -105,6 +149,20 @@ def publish_discovery(mqtt: MqttService, cameras: Iterable[object], discovery_pr
             "device": dev,
         }
         _pub_config(mqtt, f"{prefix}/binary_sensor/{obj_id}_pet/config", cfg)
+
+        # binary_sensor: unknown pet present (uses pet ID module when available)
+        cfg = {
+            "name": f"{name} Unknown Pet",
+            "unique_id": f"{obj_id}_pet_unknown_present",
+            "state_topic": f"{base_topic}/{topic_cam}/presence/pet/unknown",
+            "payload_on": "ON",
+            "payload_off": "OFF",
+            "availability_topic": avail,
+            "device_class": "presence",
+            "device": dev,
+            "icon": "mdi:help-circle",
+        }
+        _pub_config(mqtt, f"{prefix}/binary_sensor/{obj_id}_pet_unknown/config", cfg)
 
         # sensor: person count
         cfg = {
@@ -168,3 +226,21 @@ def publish_discovery(mqtt: MqttService, cameras: Iterable[object], discovery_pr
                 "icon": "mdi:account",
             }
             _pub_config(mqtt, f"{prefix}/device_tracker/{obj_id}_person_{label_id}/config", cfg)
+
+        # binary_sensor: known pets (from labels_pets.json or data/pets)
+        for label in pet_labels:
+            if label.casefold() in ("unknown", "pet", "dog", "cat"):
+                continue
+            label_id = _slug(label, "pet")
+            cfg = {
+                "name": f"{label} ({name})",
+                "unique_id": f"{obj_id}_pet_{label_id}_present",
+                "state_topic": f"{base_topic}/{topic_cam}/presence/pet/{label}",
+                "payload_on": "ON",
+                "payload_off": "OFF",
+                "availability_topic": avail,
+                "device_class": "presence",
+                "device": dev,
+                "icon": "mdi:paw",
+            }
+            _pub_config(mqtt, f"{prefix}/binary_sensor/{obj_id}_pet_{label_id}/config", cfg)

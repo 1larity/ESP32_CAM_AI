@@ -41,6 +41,22 @@ class PresenceBus:
                 seen.add(key)
                 self.last_seen[key] = now
 
+        # Pet IDs: treat recognised pet names as distinct identities.
+        for b in getattr(pkt, "pets", []) or []:
+            try:
+                pid = getattr(b, "id_label", None)
+                pid_s = str(pid).strip() if pid is not None else ""
+                pid_l = pid_s.lower()
+            except Exception:
+                pid_s = ""
+                pid_l = ""
+            if pid_s and pid_l not in ("unknown", "pet", "dog", "cat"):
+                key = f"pet:{pid_s}"
+            else:
+                key = "pet:unknown"
+            seen.add(key)
+            self.last_seen[key] = now
+
         # exit events
         for k in list(self.present):
             if now - self.last_seen.get(k, 0) > self.ttl:
@@ -66,7 +82,7 @@ class PresenceBus:
 
     def _rec_payload(self, ts: int, key: str, event: str) -> Dict:
         """
-        key may be "person", "dog", "cat", or "person:<name>".
+        key may be "person", "dog", "cat", "person:<name>", or "pet:<name>".
         Returns record with optional label field.
         """
         ts_wall = int(time.time() * 1000)
@@ -75,6 +91,9 @@ class PresenceBus:
         if key.startswith("person:"):
             base_type = "person"
             label = key.split(":", 1)[1]
+        if key.startswith("pet:"):
+            base_type = "pet"
+            label = key.split(":", 1)[1]
         return {"ts": ts_wall, "camera": self.cam, "event": event, "type": base_type, "label": label}
 
     def _publish_aggregate_states(self) -> None:
@@ -82,7 +101,7 @@ class PresenceBus:
             return
         topic_base = self._mqtt_topic or self.cam
         any_person = any((k == "person") or k.startswith("person:") for k in self.present)
-        any_pet = any(k in ("dog", "cat") for k in self.present)
+        any_pet = any((k in ("dog", "cat")) or k.startswith("pet:") for k in self.present)
         try:
             self._mqtt.publish(
                 f"{topic_base}/presence/person", "ON" if any_person else "OFF", retain=True
@@ -105,6 +124,13 @@ class PresenceBus:
                 if label:
                     self._mqtt.publish(
                         f"{topic_base}/presence/person/{label}", payload, retain=True
+                    )
+                return
+            if key.startswith("pet:"):
+                label = key.split(":", 1)[1]
+                if label:
+                    self._mqtt.publish(
+                        f"{topic_base}/presence/pet/{label}", payload, retain=True
                     )
                 return
             if key in ("dog", "cat"):
