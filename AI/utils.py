@@ -2,6 +2,7 @@
 # Shared helpers: timing, paths, image conversion, and lightweight debug routing.
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 from enum import IntFlag
@@ -19,6 +20,20 @@ class DebugMode(IntFlag):
 # Global debug mode; tweak at runtime (e.g., utils.DEBUG_MODE = DebugMode.PRINT).
 DEBUG_MODE: DebugMode = DebugMode.OFF
 DEBUG_LOG_FILE = Path(__file__).resolve().parent / "logs" / "debug.log"
+
+# PTZ debug is separately controlled so you can troubleshoot PTZ without enabling
+# full application debug spam. Can also be enabled via env var:
+#   ESP32_CAM_AI_PTZ_DEBUG=print|log|both|1
+PTZ_DEBUG_MODE: DebugMode = DebugMode.OFF
+PTZ_DEBUG_LOG_FILE = Path(__file__).resolve().parent / "logs" / "ptz_debug.log"
+
+_ptz_env = (os.getenv("ESP32_CAM_AI_PTZ_DEBUG", "") or "").strip().lower()
+if _ptz_env in ("1", "true", "yes", "on", "both"):
+    PTZ_DEBUG_MODE = DebugMode.BOTH
+elif _ptz_env in ("print", "stdout"):
+    PTZ_DEBUG_MODE = DebugMode.PRINT
+elif _ptz_env in ("log", "file"):
+    PTZ_DEBUG_MODE = DebugMode.LOG
 
 
 def monotonic_ms() -> int:
@@ -58,6 +73,29 @@ def debug(msg: str) -> None:
                 fp.write(line + "\n")
         except Exception:
             # Avoid propagating debug failures into runtime
+            pass
+
+
+def debug_ptz(msg: str) -> None:
+    """
+    PTZ-specific debug sink controlled by PTZ_DEBUG_MODE.
+    Writes to AI/logs/ptz_debug.log when LOG enabled.
+    """
+    mode = PTZ_DEBUG_MODE
+    if mode is DebugMode.OFF:
+        return
+
+    ts = time.strftime("%Y-%m-%d %H:%M:%S")
+    line = f"[{ts}] [PTZ] {msg}"
+
+    if mode & DebugMode.PRINT:
+        print(line)
+    if mode & DebugMode.LOG:
+        try:
+            ensure_dir(PTZ_DEBUG_LOG_FILE.parent)
+            with PTZ_DEBUG_LOG_FILE.open("a", encoding="utf-8") as fp:
+                fp.write(line + "\n")
+        except Exception:
             pass
 
 

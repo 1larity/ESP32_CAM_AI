@@ -4,6 +4,7 @@ if __package__:
     from .overlay_cache import _ensure_overlay_cache, _invalidate_overlay_cache, _overlay_toggles_key
     from .overlay_draw import (
         _draw_hud,
+        _draw_ptz_controls,
         _draw_rec_indicator,
         _draw_stats_line,
         _overlay_scale_factor,
@@ -22,6 +23,7 @@ else:  # Allows running this file directly from an IDE.
     )
     from UI.camera.overlay_draw import (  # type: ignore[import-not-found]
         _draw_hud,
+        _draw_ptz_controls,
         _draw_rec_indicator,
         _draw_stats_line,
         _overlay_scale_factor,
@@ -42,5 +44,6 @@ def attach_overlay_layer(cls) -> None:
     cls._invalidate_overlay_cache = _invalidate_overlay_cache
     cls._update_pixmap = _update_pixmap
     cls._draw_hud = _draw_hud
+    cls._draw_ptz_controls = _draw_ptz_controls
     cls._draw_stats_line = _draw_stats_line
     cls._draw_rec_indicator = _draw_rec_indicator

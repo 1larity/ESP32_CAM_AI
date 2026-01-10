@@ -25,6 +25,17 @@ def init_camera_widget(self) -> None:
     self._pixmap_item = QtWidgets.QGraphicsPixmapItem()
     self._scene.addItem(self._pixmap_item)
     self.view = GraphicsView(self._scene, self)
+    # Needed for PTZ hotkeys (arrow keys / PgUp/PgDn) when the view is focused.
+    self.view.setFocusPolicy(QtCore.Qt.FocusPolicy.StrongFocus)
+    try:
+        # Mouse events are delivered to the viewport widget in QGraphicsView.
+        self.view.viewport().installEventFilter(self)
+    except Exception:
+        pass
+    try:
+        self.view.installEventFilter(self)
+    except Exception:
+        pass
 
     root_layout = QtWidgets.QVBoxLayout(self)
     root_layout.setContentsMargins(0, 0, 0, 0)
@@ -48,10 +59,6 @@ def init_camera_widget(self) -> None:
     self.act_view_100 = self.menu_view.addAction("100% (1:1)")
     self.act_view_fit_window = self.menu_view.addAction("Fit window to video")
     self.btn_view_menu.setMenu(self.menu_view)
-
-    self.btn_lock = QtWidgets.QToolButton()
-    self.btn_lock.setText("Lock")
-    self.btn_lock.setCheckable(True)
 
     self.btn_info = QtWidgets.QToolButton()
     self.btn_info.setText("Info")
@@ -115,7 +122,6 @@ def init_camera_widget(self) -> None:
     tb.addWidget(self.btn_view_menu)
     tb.addWidget(self.btn_info)
     tb.addWidget(self.btn_cam_settings)
-    tb.addWidget(self.btn_lock)
 
     root_layout.addLayout(tb)
     root_layout.addWidget(self.view)
@@ -187,10 +193,23 @@ def init_camera_widget(self) -> None:
     self._frame_timer = QtCore.QTimer(self)
     self._frame_timer.setInterval(33)  # 33 ms ≈ 30 FPS for smoother UI
 
-    # Lock state / MDI subwindow tracking
-    self._locked = False
+    # MDI subwindow tracking
     self._subwindow = None
-    self._locked_geometry = QtCore.QRect()
+
+    # PTZ (ONVIF) overlay / hotkeys (populated lazily via discovery/capabilities).
+    self._ptz_available = False
+    self._ptz_has_zoom = True
+    self._ptz_hit_regions = {}
+    self._ptz_mouse_action = None
+    self._ptz_keys_down = set()
+    self._ptz_active_vel = (0.0, 0.0, 0.0)
+    self._ptz_device_xaddr = None
+    self._ptz_xaddr = None
+    self._ptz_profile_token = None
+    self._ptz_detection_started = False
+    self._ptz_repeat_timer = QtCore.QTimer(self)
+    self._ptz_repeat_timer.setInterval(250)
+    self._ptz_repeat_timer.timeout.connect(self._ptz_repeat_tick)
 
     # Apply persisted zoom level (view scale)
     try:
@@ -220,8 +239,6 @@ def init_camera_widget(self) -> None:
     self.act_view_100.triggered.connect(self.zoom_100)
     self.act_view_fit_window.triggered.connect(self.fit_window_to_video)
 
-    # Lock
-    self.btn_lock.toggled.connect(self._on_lock_toggled)
     self.btn_info.clicked.connect(self._show_info)
     try:
         self.view.zoomChanged.connect(self._on_zoom_changed)
@@ -239,9 +256,6 @@ def init_camera_widget(self) -> None:
 
     # Enrollment service – singleton
     self._enrollment = EnrollmentService.instance()
-
-    # Intercept view move/resize when locked
-    self.view.installEventFilter(self)
 
     # Defaults (respect per-camera overrides already applied)
     self.act_ai_enabled.setChecked(self._ai_enabled)

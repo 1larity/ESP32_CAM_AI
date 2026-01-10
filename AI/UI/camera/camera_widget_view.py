@@ -5,7 +5,7 @@ from PySide6 import QtCore, QtWidgets, QtGui
 
 def attach_view_handlers(cls) -> None:
     """
-    Inject fit/zoom/lock/scrollbar helpers into CameraWidget.
+    Inject fit/zoom/scrollbar helpers into CameraWidget.
 
     Assumes CameraWidget defines:
       - self.view              : QGraphicsView
@@ -13,9 +13,6 @@ def attach_view_handlers(cls) -> None:
       - self._pixmap_item      : QGraphicsPixmapItem
       - self.btn_rec / btn_snap / btn_overlay_menu / btn_ai_menu / btn_view_menu
       - self.act_ai_* / self.act_overlay_*
-      - self._locked           : bool
-      - self._subwindow        : QMdiSubWindow | None
-      - self._locked_geometry  : QRect
     """
 
     def _find_mdi_subwindow(self) -> QtWidgets.QMdiSubWindow | None:
@@ -102,58 +99,6 @@ def attach_view_handlers(cls) -> None:
         except Exception:
             pass
 
-    def _on_lock_toggled(self, checked: bool) -> None:
-        """
-        Lock/unlock the camera subwindow.
-
-        When locked:
-          - Disable controls/menus.
-          - Prevent the QMdiSubWindow from being moved/resized.
-        """
-        self._locked = bool(checked)
-
-        if getattr(self, "_subwindow", None) is None:
-            w = _find_mdi_subwindow(self)
-            if w is not None:
-                self._subwindow = w
-                self._subwindow.installEventFilter(self)
-
-        if self._subwindow is not None:
-            if self._locked:
-                self._locked_geometry = self._subwindow.geometry()
-            else:
-                self._locked_geometry = QtCore.QRect()
-
-        self._update_lock_state()
-
-    def _update_lock_state(self) -> None:
-        """Enable/disable all interactive controls according to lock state."""
-        locked = bool(getattr(self, "_locked", False))
-
-        # Toolbar buttons
-        for btn in (
-            getattr(self, "btn_rec", None),
-            getattr(self, "btn_snap", None),
-            getattr(self, "btn_overlay_menu", None),
-            getattr(self, "btn_ai_menu", None),
-            getattr(self, "btn_view_menu", None),
-        ):
-            if btn is not None:
-                btn.setEnabled(not locked)
-
-
-        # AI + overlay menu actions
-        for act in (
-            getattr(self, "act_ai_enabled", None),
-            getattr(self, "act_ai_yolo", None),
-            getattr(self, "act_ai_faces", None),
-            getattr(self, "act_ai_pets", None),
-            getattr(self, "act_overlay_detections", None),
-            getattr(self, "act_overlay_hud", None),
-        ):
-            if act is not None:
-                act.setEnabled(not locked)
-
     def _update_scrollbars(self) -> None:
         """
         Hide scrollbars when the view fully contains the scene rect.
@@ -188,29 +133,6 @@ def attach_view_handlers(cls) -> None:
             view.setVerticalScrollBarPolicy(
                 QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff
             )
-
-    def eventFilter(
-        self, obj: QtCore.QObject, event: QtCore.QEvent
-    ) -> bool:  # type: ignore[override]
-        """
-        Prevent moving/resizing the subwindow while locked.
-        """
-        if obj is getattr(self, "_subwindow", None) and getattr(
-            self, "_locked", False
-        ):
-            if event.type() in (
-                QtCore.QEvent.Type.Move,
-                QtCore.QEvent.Type.Resize,
-            ):
-                if (
-                    getattr(self, "_locked_geometry", None)
-                    and not self._locked_geometry.isNull()
-                ):
-                    self._subwindow.setGeometry(self._locked_geometry)
-                return True
-
-        # Fall back to QWidget's eventFilter
-        return QtWidgets.QWidget.eventFilter(self, obj, event)
 
     def resizeEvent(
         self, event: QtGui.QResizeEvent
@@ -254,10 +176,7 @@ def attach_view_handlers(cls) -> None:
 
     # Bind helpers into the target class
     cls.fit_window_to_video = fit_window_to_video
-    cls._on_lock_toggled = _on_lock_toggled
-    cls._update_lock_state = _update_lock_state
     cls._update_scrollbars = _update_scrollbars
-    cls.eventFilter = eventFilter
     cls.resizeEvent = resizeEvent
     cls.fit_to_window = fit_to_window
     cls.zoom_100 = zoom_100

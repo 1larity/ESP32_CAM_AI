@@ -86,6 +86,12 @@ def _render_overlay_cache(self, pkt, w: int, h: int, now_ms: int) -> None:
         # Recording indicator overlay (placed on video, not toolbar)
         if getattr(self, "_rec_indicator_on", False):
             self._draw_rec_indicator(painter, w, h)
+
+        # PTZ controls (top-right) for PTZ-capable ONVIF cameras
+        try:
+            self._draw_ptz_controls(painter, w, h)
+        except Exception:
+            pass
     finally:
         painter.end()
 

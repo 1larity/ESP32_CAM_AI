@@ -166,8 +166,12 @@ def main() -> None:
     from model_init import init_models
     from startup_flow import StartupFlow
 
-    # Enable debug (prints + logs to AI/logs/debug.log)
-    utils.DEBUG_MODE = DebugMode.BOTH
+    # Debug flags (set here)
+    # - `utils.DEBUG_MODE` writes to `AI/logs/debug.log`
+    # - `utils.PTZ_DEBUG_MODE` writes to `AI/logs/ptz_debug.log`
+    # Options: DebugMode.OFF | DebugMode.PRINT | DebugMode.LOG | DebugMode.BOTH
+    utils.DEBUG_MODE = DebugMode.OFF
+    utils.PTZ_DEBUG_MODE = DebugMode.PRINT
 
     app = QtWidgets.QApplication(sys.argv)
     app.setApplicationName("ESP32-CAM AI Viewer")

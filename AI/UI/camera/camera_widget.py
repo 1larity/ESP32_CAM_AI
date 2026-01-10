@@ -1,6 +1,10 @@
 # camera/camera_widget.py
 from __future__ import annotations
 
+import queue
+import re
+import threading
+import time
 from typing import Optional
 from urllib.parse import parse_qs, urlencode, urlparse
 import requests
@@ -8,6 +12,7 @@ import requests
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from settings import AppSettings, CameraSettings, save_settings
+from utils import debug_ptz
 from .camera_settings_dialog import CameraSettingsDialog
 
 # Helper initialiser / attach functions
@@ -43,7 +48,7 @@ class CameraWidget(QtWidgets.QWidget):
       - init_camera_widget(self)               → build UI, state, wiring
       - attach_video_handlers(CameraWidget)    → frame polling, recorder, HUD, detections handler
       - attach_overlay_handlers(CameraWidget)  → AI / overlay toggles
-      - attach_view_handlers(CameraWidget)     → fit / lock helpers
+      - attach_view_handlers(CameraWidget)     → fit / zoom helpers
     """
 
     # Class-level guard: ensures injected handlers exist before init wiring connects signals.
@@ -76,12 +81,25 @@ class CameraWidget(QtWidgets.QWidget):
 
     # Lifecycle entry points used by MainWindow
     def start(self) -> None:
+        debug_ptz(
+            f"{getattr(self.cam_cfg, 'name', '')}: start onvif={bool(getattr(self.cam_cfg, 'is_onvif', False))} "
+            f"url={self._redact_url_for_display(self.cam_cfg.effective_url())}"
+        )
         self._capture.start()
         self._detector.start()
         self._frame_timer.start()
         self._publish_mqtt_snapshot()
+        self._start_ptz_detection()
 
     def stop(self) -> None:
+        debug_ptz(f"{getattr(self.cam_cfg, 'name', '')}: stop")
+        try:
+            if hasattr(self, "_ptz_repeat_timer"):
+                self._ptz_repeat_timer.stop()
+        except Exception:
+            pass
+        self._ptz_stop()
+        self._stop_ptz_worker()
         self._frame_timer.stop()
         self._capture.stop()
         # Graceful stop for the detector thread, but never hang the app on exit.
@@ -349,6 +367,496 @@ class CameraWidget(QtWidgets.QWidget):
         except Exception:
             # Best-effort; keep existing config if camera unreachable.
             return
+
+    # ------------------------------------------------------------------ #
+    # PTZ (ONVIF)
+    # ------------------------------------------------------------------ #
+
+    def _start_ptz_detection(self) -> None:
+        if not bool(getattr(self.cam_cfg, "is_onvif", False)):
+            debug_ptz(f"{getattr(self.cam_cfg, 'name', '')}: PTZ detection skipped (not ONVIF)")
+            return
+        if bool(getattr(self, "_ptz_detection_started", False)):
+            debug_ptz(f"{getattr(self.cam_cfg, 'name', '')}: PTZ detection already started")
+            return
+        self._ptz_detection_started = True
+
+        debug_ptz(f"{getattr(self.cam_cfg, 'name', '')}: PTZ detection thread starting")
+        t = threading.Thread(target=self._ptz_detect_worker, daemon=True)
+        self._ptz_detect_thread = t
+        t.start()
+
+    @staticmethod
+    def _guess_onvif_profile_token(stream_url: str) -> str | None:
+        m = re.search(r"/Streaming/Channels/(\d+)", stream_url or "")
+        if m:
+            return m.group(1)
+        return None
+
+    def _ptz_detect_worker(self) -> None:
+        parsed = urlparse(self.cam_cfg.effective_url())
+        host = parsed.hostname
+        if not host:
+            debug_ptz(
+                f"{getattr(self.cam_cfg, 'name', '')}: PTZ detect failed (no host) "
+                f"url={self._redact_url_for_display(self.cam_cfg.effective_url())}"
+            )
+            return
+
+        user, pwd = self._extract_url_credentials()
+        debug_ptz(
+            f"{getattr(self.cam_cfg, 'name', '')}: PTZ detect begin host={host} "
+            f"user={'<set>' if user else '<none>'} pwd={'<set>' if pwd else '<none>'}"
+        )
+
+        device_xaddr = f"http://{host}/onvif/device_service"
+        try:
+            from onvif import discover_onvif
+
+            hits = discover_onvif(timeout=1.0, retries=1)
+            debug_ptz(
+                f"{getattr(self.cam_cfg, 'name', '')}: WS-Discovery hits={len(hits)}"
+            )
+            for h in hits:
+                if h.ip == host or h.host == host:
+                    device_xaddr = h.xaddr
+                    break
+        except Exception:
+            debug_ptz(
+                f"{getattr(self.cam_cfg, 'name', '')}: WS-Discovery failed; using fallback xaddr={device_xaddr}"
+            )
+            pass
+        debug_ptz(f"{getattr(self.cam_cfg, 'name', '')}: PTZ device_xaddr={device_xaddr}")
+
+        ptz_xaddr: str | None = None
+        profile_token: str | None = None
+        profile_tokens: list[str] = []
+
+        try:
+            from onvif import OnvifClient
+
+            cli = OnvifClient(device_xaddr, username=user, password=pwd)
+            caps = cli.get_capabilities()
+            debug_ptz(
+                f"{getattr(self.cam_cfg, 'name', '')}: capabilities media_xaddr={getattr(caps, 'media_xaddr', None)} "
+                f"ptz_xaddr={getattr(caps, 'ptz_xaddr', None)}"
+            )
+            ptz_xaddr = caps.ptz_xaddr
+            if not ptz_xaddr:
+                debug_ptz(
+                    f"{getattr(self.cam_cfg, 'name', '')}: PTZ unavailable (no ptz_xaddr)"
+                )
+                return
+
+            guess = self._guess_onvif_profile_token(self.cam_cfg.effective_url())
+            try:
+                profiles = cli.get_profiles(media_xaddr=caps.media_xaddr or device_xaddr)
+            except Exception:
+                profiles = []
+            try:
+                prof_tokens = [getattr(p, "token", None) for p in profiles]
+                prof_names = [getattr(p, "name", None) for p in profiles]
+                debug_ptz(
+                    f"{getattr(self.cam_cfg, 'name', '')}: profiles count={len(profiles)} guess={guess} "
+                    f"tokens={prof_tokens[:6]} names={prof_names[:3]}"
+                )
+            except Exception:
+                pass
+
+            profile_tokens = [p.token for p in profiles if getattr(p, "token", None)]
+
+            if guess and any(getattr(p, "token", None) == guess for p in profiles):
+                profile_token = guess
+            elif profiles:
+                # Prefer a non-audio looking profile name if possible.
+                for p in profiles:
+                    name = (getattr(p, "name", "") or "").lower()
+                    if "audio" in name:
+                        continue
+                    tok = getattr(p, "token", None)
+                    if tok:
+                        profile_token = tok
+                        break
+                if not profile_token:
+                    profile_token = getattr(profiles[0], "token", None)
+            else:
+                profile_token = guess
+        except Exception as e:
+            # Auth or connectivity failure: don't show PTZ UI.
+            debug_ptz(f"{getattr(self.cam_cfg, 'name', '')}: PTZ detect failed: {e}")
+            try:
+                from onvif import OnvifAuthError
+
+                if isinstance(e, OnvifAuthError):
+                    return
+            except Exception:
+                pass
+            return
+
+        if not ptz_xaddr or not profile_token:
+            debug_ptz(
+                f"{getattr(self.cam_cfg, 'name', '')}: PTZ unavailable (ptz_xaddr={bool(ptz_xaddr)} "
+                f"profile_token={profile_token})"
+            )
+            return
+
+        self._ptz_device_xaddr = device_xaddr
+        self._ptz_xaddr = ptz_xaddr
+        self._ptz_profile_token = profile_token
+        self._ptz_profile_tokens = profile_tokens
+        self._ptz_available = True
+        self._ptz_move_mode = "continuous"
+        debug_ptz(
+            f"{getattr(self.cam_cfg, 'name', '')}: PTZ enabled token={profile_token} ptz_xaddr={ptz_xaddr}"
+        )
+        # Trigger an overlay redraw so the PTZ control appears.
+        self._overlay_cache_dirty = True
+
+    def _ensure_ptz_worker(self) -> None:
+        if not bool(getattr(self, "_ptz_available", False)):
+            return
+        t = getattr(self, "_ptz_worker_thread", None)
+        if t is not None and getattr(t, "is_alive", lambda: False)():
+            return
+
+        self._ptz_worker_stop = threading.Event()
+        self._ptz_queue: "queue.Queue[tuple]" = queue.Queue(maxsize=2)
+
+        debug_ptz(
+            f"{getattr(self.cam_cfg, 'name', '')}: PTZ worker starting "
+            f"ptz_xaddr={getattr(self, '_ptz_xaddr', None)} token={getattr(self, '_ptz_profile_token', None)}"
+        )
+        t = threading.Thread(target=self._ptz_worker_loop, daemon=True)
+        self._ptz_worker_thread = t
+        t.start()
+
+    def _stop_ptz_worker(self) -> None:
+        debug_ptz(f"{getattr(self.cam_cfg, 'name', '')}: PTZ worker stopping")
+        try:
+            getattr(self, "_ptz_worker_stop", None) and self._ptz_worker_stop.set()
+        except Exception:
+            pass
+        t = getattr(self, "_ptz_worker_thread", None)
+        if t is not None:
+            try:
+                t.join(timeout=0.5)
+            except Exception:
+                pass
+
+    def _ptz_enqueue_move(self, pan: float, tilt: float, zoom: float) -> None:
+        self._ensure_ptz_worker()
+        q = getattr(self, "_ptz_queue", None)
+        if q is None:
+            return
+        cmd = ("move", float(pan), float(tilt), float(zoom))
+        try:
+            q.put_nowait(cmd)
+        except queue.Full:
+            debug_ptz(f"{getattr(self.cam_cfg, 'name', '')}: PTZ queue full; dropping stale move")
+            try:
+                _ = q.get_nowait()
+            except Exception:
+                pass
+            try:
+                q.put_nowait(cmd)
+            except Exception:
+                pass
+
+    def _ptz_enqueue_stop(self) -> None:
+        self._ensure_ptz_worker()
+        q = getattr(self, "_ptz_queue", None)
+        if q is None:
+            return
+        debug_ptz(f"{getattr(self.cam_cfg, 'name', '')}: PTZ enqueue stop")
+        try:
+            while True:
+                _ = q.get_nowait()
+        except queue.Empty:
+            pass
+        try:
+            q.put_nowait(("stop",))
+        except Exception:
+            pass
+
+    def _ptz_worker_loop(self) -> None:
+        device_xaddr = getattr(self, "_ptz_device_xaddr", None)
+        ptz_xaddr = getattr(self, "_ptz_xaddr", None)
+        token = getattr(self, "_ptz_profile_token", None)
+        if not device_xaddr or not ptz_xaddr or not token:
+            return
+
+        user, pwd = self._extract_url_credentials()
+        debug_ptz(
+            f"{getattr(self.cam_cfg, 'name', '')}: PTZ worker ready device_xaddr={device_xaddr} "
+            f"ptz_xaddr={ptz_xaddr} token={token} user={'<set>' if user else '<none>'} pwd={'<set>' if pwd else '<none>'}"
+        )
+        try:
+            from onvif import OnvifClient, OnvifHttpError
+
+            cli = OnvifClient(device_xaddr, username=user, password=pwd)
+        except Exception:
+            debug_ptz(f"{getattr(self.cam_cfg, 'name', '')}: PTZ worker failed to init OnvifClient")
+            return
+
+        stop_evt = getattr(self, "_ptz_worker_stop", None)
+        q = getattr(self, "_ptz_queue", None)
+        if stop_evt is None or q is None:
+            return
+
+        last_move_logged: tuple[float, float, float] | None = None
+        last_move_log_ts = 0.0
+        last_err: str | None = None
+        last_err_ts = 0.0
+
+        while not stop_evt.is_set():
+            try:
+                cmd = q.get(timeout=0.25)
+            except queue.Empty:
+                continue
+            try:
+                if not isinstance(cmd, tuple) or not cmd:
+                    continue
+                if cmd[0] == "stop":
+                    debug_ptz(f"{getattr(self.cam_cfg, 'name', '')}: PTZ send stop")
+                    cli.ptz_stop(
+                        token,
+                        ptz_xaddr=ptz_xaddr,
+                        zoom=bool(getattr(self, "_ptz_has_zoom", True)),
+                    )
+                elif cmd[0] == "move" and len(cmd) >= 4:
+                    pan, tilt, zoom = float(cmd[1]), float(cmd[2]), float(cmd[3])
+                    now = time.time()
+                    move = (pan, tilt, zoom)
+                    if (
+                        last_move_logged is None
+                        or move != last_move_logged
+                        or (now - last_move_log_ts) > 2.0
+                    ):
+                        debug_ptz(
+                            f"{getattr(self.cam_cfg, 'name', '')}: PTZ send move pan={pan:.2f} tilt={tilt:.2f} zoom={zoom:.2f}"
+                        )
+                        last_move_logged = move
+                        last_move_log_ts = now
+
+                    mode = (getattr(self, "_ptz_move_mode", "continuous") or "continuous").lower()
+                    if mode == "relative":
+                        step = 0.08
+                        cli.ptz_relative_move(
+                            token,
+                            ptz_xaddr=ptz_xaddr,
+                            pan=pan * step,
+                            tilt=tilt * step,
+                            zoom=zoom * step,
+                        )
+                    else:
+                        try:
+                            cli.ptz_continuous_move(
+                                token,
+                                ptz_xaddr=ptz_xaddr,
+                                pan=pan,
+                                tilt=tilt,
+                                zoom=zoom,
+                                timeout_s=0.6,
+                            )
+                        except OnvifHttpError as e:
+                            if e.status_code == 400:
+                                debug_ptz(
+                                    f"{getattr(self.cam_cfg, 'name', '')}: PTZ ContinuousMove rejected; "
+                                    f"switching to RelativeMove ({e.detail})"
+                                )
+                                self._ptz_move_mode = "relative"
+                                step = 0.08
+                                cli.ptz_relative_move(
+                                    token,
+                                    ptz_xaddr=ptz_xaddr,
+                                    pan=pan * step,
+                                    tilt=tilt * step,
+                                    zoom=zoom * step,
+                                )
+                            else:
+                                raise
+            except Exception as e:
+                now = time.time()
+                msg = str(e)
+                if msg != last_err or (now - last_err_ts) > 2.0:
+                    debug_ptz(
+                        f"{getattr(self.cam_cfg, 'name', '')}: PTZ command failed ({cmd[0]}): {e}"
+                    )
+                    last_err = msg
+                    last_err_ts = now
+                continue
+
+    def _ptz_repeat_tick(self) -> None:
+        pan, tilt, zoom = getattr(self, "_ptz_active_vel", (0.0, 0.0, 0.0))
+        if pan == 0.0 and tilt == 0.0 and zoom == 0.0:
+            return
+        self._ptz_enqueue_move(pan, tilt, zoom)
+
+    def _ptz_set_velocity(self, pan: float, tilt: float, zoom: float) -> None:
+        if not bool(getattr(self, "_ptz_available", False)):
+            return
+        pan = float(max(-1.0, min(1.0, pan)))
+        tilt = float(max(-1.0, min(1.0, tilt)))
+        zoom = float(max(-1.0, min(1.0, zoom)))
+
+        prev = getattr(self, "_ptz_active_vel", (0.0, 0.0, 0.0))
+        if (pan, tilt, zoom) != prev:
+            debug_ptz(
+                f"{getattr(self.cam_cfg, 'name', '')}: PTZ velocity {prev} -> ({pan:.2f}, {tilt:.2f}, {zoom:.2f})"
+            )
+        self._ptz_active_vel = (pan, tilt, zoom)
+        if pan == 0.0 and tilt == 0.0 and zoom == 0.0:
+            try:
+                self._ptz_repeat_timer.stop()
+            except Exception:
+                pass
+            self._ptz_enqueue_stop()
+            return
+
+        try:
+            if not self._ptz_repeat_timer.isActive():
+                self._ptz_repeat_timer.start()
+        except Exception:
+            pass
+        self._ptz_enqueue_move(pan, tilt, zoom)
+
+    def _ptz_stop(self) -> None:
+        debug_ptz(f"{getattr(self.cam_cfg, 'name', '')}: PTZ stop")
+        try:
+            self._ptz_mouse_action = None
+        except Exception:
+            pass
+        try:
+            self._ptz_keys_down = set()
+        except Exception:
+            pass
+        self._ptz_set_velocity(0.0, 0.0, 0.0)
+
+    def _ptz_velocity_from_keys(self) -> tuple[float, float, float]:
+        keys = getattr(self, "_ptz_keys_down", set()) or set()
+        speed = 0.5
+        pan = 0.0
+        tilt = 0.0
+        zoom = 0.0
+        if QtCore.Qt.Key.Key_Left in keys:
+            pan -= speed
+        if QtCore.Qt.Key.Key_Right in keys:
+            pan += speed
+        if QtCore.Qt.Key.Key_Up in keys:
+            tilt += speed
+        if QtCore.Qt.Key.Key_Down in keys:
+            tilt -= speed
+        if bool(getattr(self, "_ptz_has_zoom", True)):
+            if QtCore.Qt.Key.Key_PageUp in keys:
+                zoom += speed
+            if QtCore.Qt.Key.Key_PageDown in keys:
+                zoom -= speed
+        return pan, tilt, zoom
+
+    def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:  # type: ignore[override]
+        # Key events: delivered to QGraphicsView widget.
+        if obj is getattr(self, "view", None):
+            if event.type() == QtCore.QEvent.Type.FocusOut:
+                self._ptz_stop()
+                return False
+            if event.type() in (QtCore.QEvent.Type.KeyPress, QtCore.QEvent.Type.KeyRelease):
+                if not bool(getattr(self, "_ptz_available", False)):
+                    return False
+                key = getattr(event, "key", lambda: None)()
+                if key not in (
+                    QtCore.Qt.Key.Key_Left,
+                    QtCore.Qt.Key.Key_Right,
+                    QtCore.Qt.Key.Key_Up,
+                    QtCore.Qt.Key.Key_Down,
+                    QtCore.Qt.Key.Key_PageUp,
+                    QtCore.Qt.Key.Key_PageDown,
+                ):
+                    return False
+                if getattr(event, "isAutoRepeat", lambda: False)():
+                    return True
+                if event.type() == QtCore.QEvent.Type.KeyPress:
+                    debug_ptz(f"{getattr(self.cam_cfg, 'name', '')}: PTZ key down {key}")
+                    self._ptz_keys_down.add(key)
+                else:
+                    debug_ptz(f"{getattr(self.cam_cfg, 'name', '')}: PTZ key up {key}")
+                    try:
+                        self._ptz_keys_down.discard(key)
+                    except Exception:
+                        pass
+                if self._ptz_mouse_action is None:
+                    pan, tilt, zoom = self._ptz_velocity_from_keys()
+                    self._ptz_set_velocity(pan, tilt, zoom)
+                return True
+
+        # Mouse events: delivered to the viewport widget in QGraphicsView.
+        try:
+            viewport = self.view.viewport()  # type: ignore[attr-defined]
+        except Exception:
+            viewport = None
+        if viewport is not None and obj is viewport:
+            if event.type() in (
+                QtCore.QEvent.Type.MouseButtonPress,
+                QtCore.QEvent.Type.MouseButtonRelease,
+            ):
+                if not bool(getattr(self, "_ptz_available", False)):
+                    return False
+                if getattr(event, "button", lambda: None)() != QtCore.Qt.MouseButton.LeftButton:
+                    return False
+                regions = getattr(self, "_ptz_hit_regions", None) or {}
+                if not isinstance(regions, dict) or not regions:
+                    debug_ptz(
+                        f"{getattr(self.cam_cfg, 'name', '')}: PTZ mouse event but no hit regions yet"
+                    )
+                    return False
+
+                try:
+                    try:
+                        pos = event.position().toPoint()
+                    except Exception:
+                        pos = event.pos()
+                    pt = self.view.mapToScene(pos)
+                except Exception:
+                    return False
+
+                if event.type() == QtCore.QEvent.Type.MouseButtonPress:
+                    for name, rect in regions.items():
+                        try:
+                            if rect.contains(pt):
+                                self.view.setFocus()
+                                self._ptz_mouse_action = str(name)
+                                debug_ptz(
+                                    f"{getattr(self.cam_cfg, 'name', '')}: PTZ mouse press action={name} "
+                                    f"pt=({pt.x():.0f},{pt.y():.0f})"
+                                )
+                                speed = 0.5
+                                if name == "up":
+                                    self._ptz_set_velocity(0.0, speed, 0.0)
+                                elif name == "down":
+                                    self._ptz_set_velocity(0.0, -speed, 0.0)
+                                elif name == "left":
+                                    self._ptz_set_velocity(-speed, 0.0, 0.0)
+                                elif name == "right":
+                                    self._ptz_set_velocity(speed, 0.0, 0.0)
+                                elif name == "zoom_in":
+                                    self._ptz_set_velocity(0.0, 0.0, speed)
+                                elif name == "zoom_out":
+                                    self._ptz_set_velocity(0.0, 0.0, -speed)
+                                return True
+                        except Exception:
+                            continue
+                    return False
+
+                # Release
+                if self._ptz_mouse_action is not None:
+                    debug_ptz(
+                        f"{getattr(self.cam_cfg, 'name', '')}: PTZ mouse release action={self._ptz_mouse_action}"
+                    )
+                    self._ptz_mouse_action = None
+                    pan, tilt, zoom = self._ptz_velocity_from_keys()
+                    self._ptz_set_velocity(pan, tilt, zoom)
+                    return True
+
+        return super().eventFilter(obj, event)
 
     def _open_camera_settings(self) -> None:
         dlg = CameraSettingsDialog(self.cam_cfg, self.app_cfg, self, self)
