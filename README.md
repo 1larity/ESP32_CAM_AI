@@ -34,7 +34,7 @@ Key Endpoints
 
 Desktop Viewer
 - Python 3.12 recommended. Install deps: `py -3.12 -m pip install numpy opencv-python requests pygame PySide6`.
-- Launch: `python AI/mdi_app.py`.
+- Launch: `python AI/startup.py`.
 - Features: multi-camera windows, pre-buffered recording (AVI/MJPG on Windows), optional YOLO/face/pet overlays, duplicate-by-IP prevention, Tools -> Scan For Cameras using `/api/advertise`.
 
 Repo Structure
@@ -47,7 +47,7 @@ License
 
 Python Desktop App User Guide
 - Install: Python 3.12 recommended. `py -3.12 -m pip install numpy opencv-python requests pygame PySide6`.
-- Launch: `python AI/mdi_app.py`. Camera list and settings persist in `ai/cameras.json`.
+- Launch: `python AI/startup.py`. Camera list and settings persist in `ai/cameras.json`.
 - Add cameras: Tools -> Scan For Cameras (uses `/api/advertise`) or Add/Manage and enter name, IP/host, and credentials/token if you set auth on the camera.
 - View and control: each camera opens in its own window with live view. PTZ/flash controls remain in the camera web UI; use the viewer for monitoring and status.
 - Recording: click Record to start per-camera capture (AVI/MJPG on Windows, MP4V fallback). Files save under `ai/recordings/`, auto-adjusted to even dimensions.

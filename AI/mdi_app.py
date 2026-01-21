@@ -172,6 +172,15 @@ def main():
     app = QtWidgets.QApplication(sys.argv)
     app.setApplicationName("ESP32-CAM AI Viewer")
     app_cfg = load_settings()
+    try:
+        from models import ModelManager
+
+        ModelManager.ensure_models(
+            app_cfg,
+            status_cb=lambda msg: utils.debug(f"[models] {msg}"),
+        )
+    except Exception as e:
+        utils.debug(f"[models] Model check failed: {e}")
     mqtt = MqttService(app_cfg)
     mqtt.start()
 

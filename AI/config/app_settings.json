@@ -9,23 +9,9 @@
   "yolo_url": null,
   "haar_url": null,
   "face_model": "C:\\Users\\stellaris\\Documents\\PlatformIO\\Projects\\ESP32_CAM_AI\\AI\\models\\face_yunet.onnx",
-  "window_geometry": "01d9d0cb0003000000000a00fffffff8000013ff0000057700000aa0000000a20000121b000004b700000002020000000a0000000a0000000017000013ff00000577",
-  "window_state": "000000ff00000000fd00000001000000010000011b0000054bfc0200000001fb00000014006500760065006e007400730044006f0063006b01000000160000054b0000009100ffffff000008e10000054b00000004000000040000000800000008fc00000000",
+  "window_geometry": "01d9d0cb000300000000024600000031000009c1000004650000024600000050000009c10000046500000000000000000a000000024600000050000009c100000465",
+  "window_state": "000000ff00000000fd00000001000000010000011b00000400fc0200000001fb00000014006500760065006e007400730044006f0063006b0100000016000004000000009100ffffff0000065d0000040000000004000000040000000800000008fc00000000",
   "window_geometries": {
-    "Cam-2": [
-      1137,
-      678,
-      1136,
-      677,
-      0
-    ],
-    "Cam-1": [
-      0,
-      678,
-      1137,
-      677,
-      0
-    ],
     "Cam-3": [
       1137,
       0,
@@ -53,7 +39,7 @@
   "record_motion": true,
   "motion_sensitivity": 53,
   "mqtt_enabled": true,
-  "mqtt_host": "192.168.1.101",
+  "mqtt_host": "192.168.1.7",
   "mqtt_port": 1883,
   "mqtt_client_id": "esp32_cam_ai",
   "mqtt_tls": false,
@@ -64,58 +50,8 @@
   "mqtt_discovery_prefix": "homeassistant",
   "mqtt_discovery_under_base_topic": false,
   "mqtt_user": "homeassistant",
-  "mqtt_password_enc": "4rVoM0Torv5mcTH7W4TMmRk3TPVb6A9sUTNT3LE5sIyC781Sb85ZGE729+eoIJUYQWuRjYs=",
+  "mqtt_password_enc": "kX/2HJs89iIWeYC4c2dxjMEH5pdpjb8gVrfPgd6hDHBpNNGdhgCwhMc9g+mdmQnVjATbhF4=",
   "cameras": [
-    {
-      "name": "Cam-2",
-      "stream_url": "http://192.168.1.132:81/stream",
-      "user": "sysadm",
-      "token": null,
-      "mqtt_publish": true,
-      "alt_streams": [],
-      "is_onvif": false,
-      "overlay_text_pct": 4.0,
-      "view_scale": 1.0033333333333334,
-      "record_motion": false,
-      "motion_sensitivity": 53,
-      "ai_enabled": true,
-      "ai_yolo": true,
-      "ai_faces": true,
-      "ai_pets": true,
-      "overlay_scale": 1.25,
-      "ptz_home_confirmed": false,
-      "ptz_disable_zoom": false,
-      "ptz_disable_presets": false,
-      "rotation_deg": 0,
-      "flip_horizontal": false,
-      "flip_vertical": false,
-      "password_enc": "BkXw8Lg6hxonzEhHM9+fgrpWQUIl7BrfTRtUy6YofuicIBiJBzO4XcWHeTP2uAYkO1CSN+Y="
-    },
-    {
-      "name": "Cam-1",
-      "stream_url": "http://192.168.1.130:81/stream",
-      "user": "sysadm",
-      "token": null,
-      "mqtt_publish": true,
-      "alt_streams": [],
-      "is_onvif": false,
-      "overlay_text_pct": 4.0,
-      "view_scale": 1.0033333333333334,
-      "record_motion": false,
-      "motion_sensitivity": 53,
-      "ai_enabled": true,
-      "ai_yolo": true,
-      "ai_faces": true,
-      "ai_pets": true,
-      "overlay_scale": 1.25,
-      "ptz_home_confirmed": false,
-      "ptz_disable_zoom": false,
-      "ptz_disable_presets": false,
-      "rotation_deg": 0,
-      "flip_horizontal": false,
-      "flip_vertical": false,
-      "password_enc": "3A1ETXrdIXtd4RAsYueoJHMlPwwSK+WqkV9kEvvcCqfc5u8aRogr7VWU+Cwcn2c3Mo9/yBc="
-    },
     {
       "name": "Cam-3",
       "stream_url": "rtsp://192.168.1.78:8554/Streaming/Channels/102",
@@ -146,7 +82,7 @@
       "rotation_deg": 0,
       "flip_horizontal": false,
       "flip_vertical": true,
-      "password_enc": "x8N2XBBhxMy/sYB+uqjKphL6hyRCzWcDSfpbsqj7vTnVx9ppgVtaH3J3s3Mtf6sPPe0kGA=="
+      "password_enc": "b7Yh4bRvig1ztiu8mAGc0ZTlAaDh9q4+jy0kPwSHL4i4gvMBYQCzWQHCdps9+lQebft/qg=="
     },
     {
       "name": "Cam-4",
@@ -177,7 +113,7 @@
       "rotation_deg": 180,
       "flip_horizontal": false,
       "flip_vertical": false,
-      "password_enc": "1cK0TuolmTW/OjEoA/c1oI3V9BKBy7Z50COZ6hDlTDG23Bqyoercb0EthWd8Dh+yH6i5SA=="
+      "password_enc": "Cv53VrvFqQBUNlK27z4Wfw4apX+iCabzEwLLX7jrBWmsKJUgz1Bpb2HO6jcD28ZwiiDwrA=="
     }
   ]
 }
