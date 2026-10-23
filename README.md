@@ -42,8 +42,8 @@ Repo Structure
 - `AI/`: desktop viewer app and assets.
 
 License
-- CC BY-NC 4.0: https://creativecommons.org/licenses/by-nc/4.0/
-- Non-commercial use only; attribute with a link back to this repository.
+- CC BY-NC-SA 4.0: https://creativecommons.org/licenses/by-nc-sa/4.0/
+- Attribution, non-commercial use and share-alike required; link this source and the licence and indicate changes. Third-party licences and previous grants are preserved.
 
 Python Desktop App User Guide
 - Install: Python 3.12 recommended. `py -3.12 -m pip install numpy opencv-python requests pygame PySide6`.
@@ -56,3 +56,12 @@ Python Desktop App User Guide
 - Home Assistant Persons: assign the discovered `device_tracker` (camera person / recognised name) entities to a HA Person under Settings -> People; increase "Presence grace" in the Face Tuner if it flaps.
 - Logs and events: presence/dog events are written under `ai/logs/events_<name>_<host>.log` and shown in the Events sidebar.
 - Tips: if streams stall, lower resolution in the camera web UI; verify `/api/status` and `/stream` load in a browser when adding a camera; keep firmware and app on the same LAN for best latency.
+
+## Installation alternatives
+
+- For wiring, download-mode setup and Arduino IDE uploads, see
+  [Random Nerd Tutorials’ ESP32-CAM guide](https://randomnerdtutorials.com/program-upload-code-esp32-cam/).
+  Its example sketch is not this project’s firmware; this project builds with PlatformIO.
+- To install the ready-built EVILE firmware without installing Arduino IDE or
+  PlatformIO, use [my ESP32 Firmware Flasher](https://evile.uk/redesign/projects/esp32-flasher/)
+  with the merged image in the [firmware download](https://evile.uk/redesign/projects/esp32-cam/).
